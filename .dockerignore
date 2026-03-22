@@ -1,6 +1,7 @@
 .git
 .github
 .DS_Store
+AGENTS.md
 local
 cpanm-home
 .prove

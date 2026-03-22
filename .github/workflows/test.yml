@@ -35,7 +35,7 @@ jobs:
 
       - name: Smoke test API
         run: |
-          docker run -d --rm --name zengin-pl-api-test -p 5000:5000 zengin-pl-api:test
+          docker run -d --rm --name zengin-pl-api-test -p 5000:8080 -e PORT=8080 zengin-pl-api:test
           trap 'docker rm -f zengin-pl-api-test' EXIT
           sleep 3
           curl -fsS http://127.0.0.1:5000/api/banks/0001 | grep '"code":"0001"'

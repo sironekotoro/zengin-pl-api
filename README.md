@@ -216,11 +216,13 @@ plackup -Ilib app.psgi
 
 `zengin-pl` を隣接 checkout で参照する場合は、`config/example.env` を参考に `PERL5LIB` を設定してください。
 
+アプリケーションは `PORT` 環境変数で待受ポートを受け取り、コンテナ内では `0.0.0.0` で listen する前提です。
+
 Docker で確認する場合は、デフォルトでは `zengin-pl` を Git URL から取得するため、sibling checkout は不要です。
 
 ```bash
 docker build -t zengin-pl-api:dev .
-docker run --rm -p 5000:5000 zengin-pl-api:dev
+docker run --rm -p 5000:8080 -e PORT=8080 zengin-pl-api:dev
 ```
 
 `Dockerfile` では以下の build arg を使えます。
@@ -238,6 +240,15 @@ Docker build 中の `zengin-pl` は、GitHub clone 後に `cpanm --installdeps` 
 
 ローカルでの開発中に sibling checkout を使いたい場合は、Docker build ではなく通常起動で `PERL5LIB=../zengin-pl/lib` を渡す運用を想定しています。
 
+### Docker での疎通確認例
+
+```bash
+curl http://127.0.0.1:5000/api/banks/0001
+curl 'http://127.0.0.1:5000/api/banks?name=みずほ'
+curl http://127.0.0.1:5000/api/banks/0001/branches/001
+curl 'http://127.0.0.1:5000/api/banks/0001/branches?name=東京'
+```
+
 ### フェーズ2
 - 支店系 API 実装
 - エラーレスポンス整理
@@ -251,6 +262,57 @@ Docker build 中の `zengin-pl` は、GitHub clone 後に `cpanm --installdeps` 
 ## デプロイ方針
 
 Perl をそのまま活かすため、Docker 化したうえで Cloud Run などのコンテナ実行環境に載せることを想定しています。
+
+## Cloud Run デプロイ手順
+
+事前に有効化しておくもの:
+
+- Cloud Run API
+- Artifact Registry API
+- Cloud Build API
+
+`gcloud` の初期設定後、次のように build と deploy を行えます。
+
+```bash
+export PROJECT_ID='your-gcp-project'
+export REGION='asia-northeast1'
+export REPOSITORY='zengin-pl-api'
+export IMAGE="asia-northeast1-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/zengin-pl-api:latest"
+export SERVICE='zengin-pl-api'
+
+gcloud config set project "${PROJECT_ID}"
+
+gcloud artifacts repositories create "${REPOSITORY}" \
+  --repository-format=docker \
+  --location="${REGION}"
+
+gcloud builds submit --tag "${IMAGE}"
+
+gcloud run deploy "${SERVICE}" \
+  --image "${IMAGE}" \
+  --region "${REGION}" \
+  --platform managed \
+  --allow-unauthenticated
+```
+
+Cloud Run では `PORT` 環境変数が自動で注入され、このコンテナはその値で `0.0.0.0` に bind する前提です。
+
+デプロイ後の確認例:
+
+```bash
+export SERVICE_URL="$(gcloud run services describe "${SERVICE}" --region "${REGION}" --format='value(status.url)')"
+
+curl "${SERVICE_URL}/api/banks/0001"
+curl "${SERVICE_URL}/api/banks?name=みずほ"
+curl "${SERVICE_URL}/api/banks/0001/branches/001"
+curl "${SERVICE_URL}/api/banks/0001/branches?name=東京"
+```
+
+課金を抑えるための最小メモ:
+
+- `min instances` は 0 のままにする
+- 不要になった Cloud Run service と Artifact Registry の image は削除する
+- 検証用の tag を増やしすぎない
 
 ## ライセンス
 

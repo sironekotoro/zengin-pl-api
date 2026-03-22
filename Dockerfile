@@ -4,7 +4,7 @@ FROM perl:5.40-slim
 
 ENV PERL_CPANM_OPT="--notest" \
     PLACK_ENV=deployment \
-    PORT=5000 \
+    PORT=8080 \
     ZENGIN_PL_API_BACKEND_CLASS=Zengin::Pl
 
 WORKDIR /app
@@ -31,6 +31,6 @@ RUN git clone --depth 1 "${ZENGIN_PL_GIT_URL}" /tmp/zengin-pl \
 
 COPY . /app
 
-EXPOSE 5000
+EXPOSE 8080
 
-CMD ["sh", "-c", "plackup -Ilib -p ${PORT} app.psgi"]
+CMD ["sh", "-c", "plackup -Ilib --host 0.0.0.0 --port ${PORT:-8080} app.psgi"]
