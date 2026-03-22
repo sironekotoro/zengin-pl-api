@@ -31,6 +31,9 @@
 - JSON レスポンスの返却
 - 将来的な Slack 向け整形レスポンス
 
+`zengin-pl-api` の既定 backend は、`zengin-pl` 側の正式公開名である `Zengin::Pl` を前提とします。
+`Zengin::Client` は後方互換名として扱います。
+
 ## スコープ
 
 まずは最小構成として、以下の API を提供することを目指します。
