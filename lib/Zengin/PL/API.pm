@@ -41,6 +41,14 @@ sub handle_request {
         });
     }
 
+    if ($path =~ m{\A/api/banks/(\d{4})/branches/(\d{3})/?\z}) {
+        return $self->_handle_get_branch($1, $2);
+    }
+
+    if ($path =~ m{\A/api/banks/(\d{4})/branches/?\z}) {
+        return $self->_handle_search_branches($1, $env);
+    }
+
     if ($path =~ m{\A/api/banks/(\d{4})/?\z}) {
         return $self->_handle_get_bank($1);
     }
@@ -100,6 +108,77 @@ sub _handle_search_banks {
     return $self->_json_response(200, {
         banks => [map { $self->_normalize_bank($_) } @{$banks}],
     });
+}
+
+sub _handle_get_branch {
+    my ($self, $bank_code, $branch_code) = @_;
+
+    my ($bank, $bank_error_response) = $self->_find_bank($bank_code);
+    return $bank_error_response if $bank_error_response;
+
+    my ($branch, $error) = $self->_call_backend('get_branch', $bank_code, $branch_code);
+    return $self->_backend_error_response($error) if $error;
+
+    if (!$branch) {
+        return $self->_json_response(404, {
+            error => {
+                code    => 'branch_not_found',
+                message => "Branch not found: $bank_code/$branch_code",
+            },
+        });
+    }
+
+    return $self->_json_response(200, {
+        bank   => $self->_slice_fields($bank, qw(code name)),
+        branch => $self->_normalize_branch($branch),
+    });
+}
+
+sub _handle_search_branches {
+    my ($self, $bank_code, $env) = @_;
+
+    my ($bank, $bank_error_response) = $self->_find_bank($bank_code);
+    return $bank_error_response if $bank_error_response;
+
+    my $params = $self->_parse_query_string($env->{QUERY_STRING} || q{});
+    my $name   = $params->{name};
+
+    if (!defined $name || $name eq q{}) {
+        return $self->_json_response(400, {
+            error => {
+                code    => 'invalid_request',
+                message => 'Query parameter "name" is required',
+            },
+        });
+    }
+
+    my ($branches, $error) = $self->_call_backend('search', $bank_code, $name);
+    return $self->_backend_error_response($error) if $error;
+
+    $branches ||= [];
+
+    return $self->_json_response(200, {
+        bank     => $self->_slice_fields($bank, qw(code name)),
+        branches => [map { $self->_slice_fields($_, qw(code name)) } @{$branches}],
+    });
+}
+
+sub _find_bank {
+    my ($self, $bank_code) = @_;
+
+    my ($bank, $error) = $self->_call_backend('get_bank', $bank_code);
+    return (undef, $self->_backend_error_response($error)) if $error;
+
+    if (!$bank) {
+        return (undef, $self->_json_response(404, {
+            error => {
+                code    => 'bank_not_found',
+                message => "Bank not found: $bank_code",
+            },
+        }));
+    }
+
+    return ($bank, undef);
 }
 
 sub _call_backend {
@@ -173,6 +252,28 @@ sub _normalize_bank {
 
     return \%normalized if %normalized;
     return $bank;
+}
+
+sub _normalize_branch {
+    my ($self, $branch) = @_;
+
+    return $self->_normalize_bank($branch);
+}
+
+sub _slice_fields {
+    my ($self, $entity, @fields) = @_;
+
+    my $normalized = ref $entity eq 'HASH'
+        ? $entity
+        : $self->_normalize_bank($entity);
+
+    my %sliced;
+    for my $field (@fields) {
+        $sliced{$field} = $normalized->{$field}
+            if ref $normalized eq 'HASH' && exists $normalized->{$field};
+    }
+
+    return \%sliced;
 }
 
 sub _backend_error_response {

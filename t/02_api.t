@@ -42,6 +42,43 @@ subtest 'GET /api/banks/9999 returns json error' => sub {
     is($res->{json}->{error}->{code}, 'bank_not_found', 'error code is bank_not_found');
 };
 
+subtest 'GET /api/banks/0001/branches/001 returns branch json' => sub {
+    my $res = request($app, 'GET', '/api/banks/0001/branches/001');
+
+    is($res->{status}, 200, 'status is 200');
+    is($res->{json}->{bank}->{code}, '0001', 'bank.code exists');
+    ok(defined $res->{json}->{bank}->{name}, 'bank.name exists');
+    is($res->{json}->{branch}->{code}, '001', 'branch.code exists');
+    ok(defined $res->{json}->{branch}->{name}, 'branch.name exists');
+};
+
+subtest 'GET /api/banks/0001/branches?name=東京 returns branches array' => sub {
+    my $res = request(
+        $app,
+        'GET',
+        '/api/banks/0001/branches',
+        'name=' . uri_escape_utf8('東京'),
+    );
+
+    is($res->{status}, 200, 'status is 200');
+    ok(ref $res->{json}->{branches} eq 'ARRAY', 'branches is an array');
+    ok(@{$res->{json}->{branches}} >= 1, 'branches contains at least one item');
+};
+
+subtest 'GET /api/banks/9999/branches/001 returns bank json error' => sub {
+    my $res = request($app, 'GET', '/api/banks/9999/branches/001');
+
+    is($res->{status}, 404, 'status is 404');
+    is($res->{json}->{error}->{code}, 'bank_not_found', 'error code is bank_not_found');
+};
+
+subtest 'GET /api/banks/0001/branches/999 returns branch json error' => sub {
+    my $res = request($app, 'GET', '/api/banks/0001/branches/999');
+
+    is($res->{status}, 404, 'status is 404');
+    is($res->{json}->{error}->{code}, 'branch_not_found', 'error code is branch_not_found');
+};
+
 done_testing;
 
 sub request {
@@ -102,9 +139,23 @@ sub request {
     }
 
     sub search {
-        my ($self, $name) = @_;
+        my ($self, $bank_term, $branch_term) = @_;
 
-        return [] if $name ne 'みずほ';
+        if (defined $branch_term) {
+            return [] if $bank_term ne '0001' || $branch_term ne '東京';
+
+            return [
+                {
+                    code => '001',
+                    name => '東京営業部',
+                    hira => 'とうきよう',
+                    kana => 'トウキヨウ',
+                    roma => 'toukiyou',
+                },
+            ];
+        }
+
+        return [] if $bank_term ne 'みずほ';
 
         return [
             {
@@ -115,5 +166,20 @@ sub request {
                 roma => 'mizuho',
             },
         ];
+    }
+
+    sub get_branch {
+        my ($self, $bank_code, $branch_code) = @_;
+
+        return if $bank_code ne '0001';
+        return if $branch_code eq '999';
+
+        return {
+            code => '001',
+            name => '東京営業部',
+            hira => 'とうきよう',
+            kana => 'トウキヨウ',
+            roma => 'toukiyou',
+        };
     }
 }
