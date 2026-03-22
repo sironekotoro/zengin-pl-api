@@ -1,0 +1,9 @@
+.git
+.github
+.DS_Store
+local
+cpanm-home
+.prove
+blib
+cover_db
+*.tar.gz
