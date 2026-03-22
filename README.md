@@ -222,7 +222,7 @@ Docker で確認する場合は、デフォルトでは `zengin-pl` を Git URL 
 
 ```bash
 docker build -t zengin-pl-api:dev .
-docker run --rm -p 5000:8080 -e PORT=8080 zengin-pl-api:dev
+docker run --rm -p 8080:8080 -e PORT=8080 zengin-pl-api:dev
 ```
 
 `Dockerfile` では以下の build arg を使えます。
@@ -243,10 +243,10 @@ Docker build 中の `zengin-pl` は、GitHub clone 後に `cpanm --installdeps` 
 ### Docker での疎通確認例
 
 ```bash
-curl http://127.0.0.1:5000/api/banks/0001
-curl 'http://127.0.0.1:5000/api/banks?name=みずほ'
-curl http://127.0.0.1:5000/api/banks/0001/branches/001
-curl 'http://127.0.0.1:5000/api/banks/0001/branches?name=東京'
+curl http://127.0.0.1:8080/api/banks/0001
+curl "http://127.0.0.1:8080/api/banks?name=みずほ"
+curl http://127.0.0.1:8080/api/banks/0001/branches/001
+curl "http://127.0.0.1:8080/api/banks/0001/branches?name=東京"
 ```
 
 ### フェーズ2
@@ -265,13 +265,48 @@ Perl をそのまま活かすため、Docker 化したうえで Cloud Run など
 
 ## Cloud Run デプロイ手順
 
-事前に有効化しておくもの:
+初めて Cloud Run を使う場合は、まずローカル Docker で起動確認してから deploy するのが分かりやすいです。
+
+### 事前に必要なもの
+
+- Google アカウント
+- Google Cloud プロジェクト
+- Billing の有効化
+- `gcloud` CLI
+
+あわせて、次の API を有効化しておきます。
 
 - Cloud Run API
 - Artifact Registry API
 - Cloud Build API
 
-`gcloud` の初期設定後、次のように build と deploy を行えます。
+例:
+
+```bash
+gcloud auth login
+gcloud config set project your-gcp-project
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com
+```
+
+### 1. まずはローカル Docker で確認する
+
+```bash
+docker build -t zengin-pl-api:dev .
+docker run --rm -p 8080:8080 -e PORT=8080 zengin-pl-api:dev
+```
+
+疎通確認:
+
+```bash
+curl http://localhost:8080/api/banks/0001
+curl "http://localhost:8080/api/banks?name=みずほ"
+curl http://localhost:8080/api/banks/0001/branches/001
+curl "http://localhost:8080/api/banks/0001/branches?name=東京"
+```
+
+### 2. Artifact Registry を用意する
+
+`gcloud` の初期設定後、次のように image の保存先を作成します。
 
 ```bash
 export PROJECT_ID='your-gcp-project'
@@ -285,9 +320,19 @@ gcloud config set project "${PROJECT_ID}"
 gcloud artifacts repositories create "${REPOSITORY}" \
   --repository-format=docker \
   --location="${REGION}"
+```
 
+すでに repository を作成済みなら、この手順は不要です。
+
+### 3. Cloud Build で image を build する
+
+```bash
 gcloud builds submit --tag "${IMAGE}"
+```
 
+### 4. Cloud Run に deploy する
+
+```bash
 gcloud run deploy "${SERVICE}" \
   --image "${IMAGE}" \
   --region "${REGION}" \
@@ -295,22 +340,33 @@ gcloud run deploy "${SERVICE}" \
   --allow-unauthenticated
 ```
 
+`--allow-unauthenticated` を付けるのは、この API をブラウザや `curl` からそのまま確認しやすくするためです。
+将来的に公開範囲を制限したい場合は、この設定は見直してください。
+
 Cloud Run では `PORT` 環境変数が自動で注入され、このコンテナはその値で `0.0.0.0` に bind する前提です。
 
-デプロイ後の確認例:
+### 5. デプロイ後に URL で確認する
+
+deploy 後に表示される URL を控え、`curl` で API を確認します。
 
 ```bash
 export SERVICE_URL="$(gcloud run services describe "${SERVICE}" --region "${REGION}" --format='value(status.url)')"
 
+curl "https://<cloud-run-url>/api/banks/0001"
 curl "${SERVICE_URL}/api/banks/0001"
 curl "${SERVICE_URL}/api/banks?name=みずほ"
 curl "${SERVICE_URL}/api/banks/0001/branches/001"
+curl "https://<cloud-run-url>/api/banks/0001/branches?name=東京"
 curl "${SERVICE_URL}/api/banks/0001/branches?name=東京"
 ```
 
-課金を抑えるための最小メモ:
+この公開 URL は、将来 Slack endpoint を追加したときの Request URL 候補にもなります。
 
+### 課金を抑えるための最小メモ
+
+- Cloud Run は未使用時にスケールゼロできる
 - `min instances` は 0 のままにする
+- Artifact Registry の image 保存にも課金が発生しうる
 - 不要になった Cloud Run service と Artifact Registry の image は削除する
 - 検証用の tag を増やしすぎない
 
