@@ -309,6 +309,8 @@ Perl をそのまま活かすため、Docker 化したうえで Cloud Run など
 - Artifact Registry API
 - Cloud Build API
 
+GitHub Actions から自動 deploy する場合は、これに加えて GitHub と Google Cloud の認証設定が必要です。
+
 例:
 
 ```bash
@@ -375,6 +377,63 @@ gcloud run deploy "${SERVICE}" \
 
 Cloud Run では `PORT` 環境変数が自動で注入され、このコンテナはその値で `0.0.0.0` に bind する前提です。
 
+## GitHub Actions による自動デプロイ
+
+このリポジトリでは、[deploy workflow](/Users/sironekotoro/SynologyDrive/github/zengin-pl-api/.github/workflows/deploy.yml) により `main` への push で Cloud Run へ自動 deploy する想定です。
+
+流れ:
+
+1. `prove -lr t` を実行
+2. Docker image を build
+3. Artifact Registry へ push
+4. Cloud Run へ deploy
+
+### GitHub 側で必要な設定
+
+WIF を使う前提では、GitHub repository の `Variables` に次を設定します。
+
+- `GCP_WORKLOAD_IDENTITY_PROVIDER`
+- `GCP_SERVICE_ACCOUNT`
+
+この workflow では次の固定値を使います。
+
+- project id: `zengin-pl-api`
+- region: `asia-northeast1`
+- Artifact Registry repository: `zengin-pl-api`
+- Cloud Run service: `zengin-pl-api`
+
+認証は `google-github-actions/auth@v3` と `google-github-actions/deploy-cloudrun@v3` を使います。
+
+### Google Cloud 側で必要な設定
+
+- Workload Identity Federation の provider 作成
+- GitHub Actions から利用する service account 作成
+- その service account に Cloud Run / Artifact Registry への deploy 権限を付与
+
+最低でも次の権限を持つ service account を用意してください。
+
+- Cloud Run Admin
+- Artifact Registry Writer
+- Service Account User
+
+WIF の値は Google Cloud 側で作成した provider と service account の値を、そのまま GitHub Variables へ設定します。
+
+### 暫定で Service Account Key JSON を使う場合
+
+まずは WIF を推奨しますが、暫定で試すだけなら Service Account Key JSON を GitHub Secrets に保存して `google-github-actions/auth` の `credentials_json` を使う運用も可能です。
+ただし、長期運用では WIF に寄せる方が安全です。
+
+### /api/meta に反映される build 情報
+
+deploy workflow では Cloud Run に次の環境変数を渡します。
+
+- `APP_NAME=zengin-pl-api`
+- `APP_VERSION=${{ github.ref_name }}`
+- `APP_GIT_SHA=${{ github.sha }}`
+- `APP_BUILD_TIME=<workflow 実行時刻 UTC>`
+
+そのため、`/api/meta` で deploy 済み revision の Git SHA や build 時刻を確認できます。
+
 ### 5. デプロイ後に URL で確認する
 
 deploy 後に表示される URL を控え、`curl` で API を確認します。
@@ -386,10 +445,11 @@ curl https://<cloud-run-url>/api/meta
 curl "${SERVICE_URL}/api/meta"
 curl "https://<cloud-run-url>/api/banks/0001"
 curl "${SERVICE_URL}/api/banks/0001"
-curl "${SERVICE_URL}/api/banks?name=みずほ"
 curl "${SERVICE_URL}/api/banks/0001/branches/001"
-curl "https://<cloud-run-url>/api/banks/0001/branches?name=東京"
-curl "${SERVICE_URL}/api/banks/0001/branches?name=東京"
+curl --get --data-urlencode "name=みずほ" \
+  "${SERVICE_URL}/api/banks"
+curl --get --data-urlencode "name=東京" \
+  "${SERVICE_URL}/api/banks/0001/branches"
 ```
 
 日本語を含む query parameter は、公開 URL に対してそのまま埋め込むのではなく URL エンコードして渡すのが安全です。

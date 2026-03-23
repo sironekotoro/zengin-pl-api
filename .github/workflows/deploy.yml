@@ -1,0 +1,79 @@
+name: deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: zengin-pl-api
+  REGION: asia-northeast1
+  REPOSITORY: zengin-pl-api
+  SERVICE: zengin-pl-api
+  IMAGE: asia-northeast1-docker.pkg.dev/zengin-pl-api/zengin-pl-api/zengin-pl-api:${{ github.sha }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.40'
+
+      - name: Install test dependencies
+        run: |
+          cpanm --notest --installdeps .
+
+      - name: Run tests
+        run: |
+          prove -lr t
+
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker auth
+        run: |
+          gcloud auth configure-docker "${{ env.REGION }}-docker.pkg.dev" --quiet
+
+      - name: Set build metadata
+        run: |
+          echo "APP_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
+      - name: Build image
+        run: |
+          docker build -t "${IMAGE}" .
+
+      - name: Push image
+        run: |
+          docker push "${IMAGE}"
+
+      - id: deploy
+        uses: google-github-actions/deploy-cloudrun@v3
+        with:
+          service: ${{ env.SERVICE }}
+          region: ${{ env.REGION }}
+          image: ${{ env.IMAGE }}
+          env_vars: |
+            APP_NAME=zengin-pl-api
+            APP_VERSION=${{ github.ref_name }}
+            APP_GIT_SHA=${{ github.sha }}
+            APP_BUILD_TIME=${{ env.APP_BUILD_TIME }}
+
+      - name: Show service URL
+        run: |
+          echo "Cloud Run URL: ${{ steps.deploy.outputs.url }}"
