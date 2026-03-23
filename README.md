@@ -360,6 +360,24 @@ curl "https://<cloud-run-url>/api/banks/0001/branches?name=東京"
 curl "${SERVICE_URL}/api/banks/0001/branches?name=東京"
 ```
 
+日本語を含む query parameter は、公開 URL に対してそのまま埋め込むのではなく URL エンコードして渡すのが安全です。
+銀行名検索や支店名検索では、`curl --get --data-urlencode` を使う方法を推奨します。
+
+```bash
+curl --get --data-urlencode "name=みずほ" \
+  "https://<cloud-run-url>/api/banks"
+
+curl --get --data-urlencode "name=東京" \
+  "https://<cloud-run-url>/api/banks/0001/branches"
+```
+
+直接 URL を書く場合は、`%E3...` のような URL エンコード済み文字列を使います。
+
+```bash
+curl "https://<cloud-run-url>/api/banks?name=%E3%81%BF%E3%81%9A%E3%81%BB"
+curl "https://<cloud-run-url>/api/banks/0001/branches?name=%E6%9D%B1%E4%BA%AC"
+```
+
 この公開 URL は、将来 Slack endpoint を追加したときの Request URL 候補にもなります。
 
 ### 課金を抑えるための最小メモ
