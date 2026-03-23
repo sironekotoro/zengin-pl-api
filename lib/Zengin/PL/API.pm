@@ -41,6 +41,10 @@ sub handle_request {
         });
     }
 
+    if ($path =~ m{\A/api/meta/?\z}) {
+        return $self->_handle_meta;
+    }
+
     if ($path =~ m{\A/api/banks/(\d{4})/branches/(\d{3})/?\z}) {
         return $self->_handle_get_branch($1, $2);
     }
@@ -163,6 +167,29 @@ sub _handle_search_branches {
     });
 }
 
+sub _handle_meta {
+    my ($self) = @_;
+
+    my $backend = $self->_backend;
+    my $base_url = $self->_backend_base_url($backend);
+
+    return $self->_json_response(200, {
+        api => {
+            name       => defined $ENV{APP_NAME} ? $ENV{APP_NAME} : 'zengin-pl-api',
+            version    => $self->_env_or_undef('APP_VERSION'),
+            git_sha    => $self->_env_or_undef('APP_GIT_SHA'),
+            build_time => $self->_env_or_undef('APP_BUILD_TIME'),
+        },
+        backend => {
+            class    => $self->{backend_class},
+            base_url => $base_url,
+        },
+        data => {
+            source => $base_url,
+        },
+    });
+}
+
 sub _find_bank {
     my ($self, $bank_code) = @_;
 
@@ -208,6 +235,24 @@ sub _backend {
         : $backend_class;
 
     return $self->{backend};
+}
+
+sub _backend_base_url {
+    my ($self, $backend) = @_;
+
+    return undef if !defined $backend;
+
+    return $backend->base_url if ref $backend && $backend->can('base_url');
+    return $backend->{base_url} if ref $backend eq 'HASH' && exists $backend->{base_url};
+
+    if (ref $backend) {
+        my $reftype = ref $backend;
+        no strict 'refs';
+        return $backend->{base_url} if $reftype && exists $backend->{base_url};
+    }
+
+    return $ENV{ZENGIN_PL_BASE_URL} if defined $ENV{ZENGIN_PL_BASE_URL};
+    return undef;
 }
 
 sub _parse_query_string {
@@ -274,6 +319,11 @@ sub _slice_fields {
     }
 
     return \%sliced;
+}
+
+sub _env_or_undef {
+    my ($self, $name) = @_;
+    return defined $ENV{$name} && $ENV{$name} ne q{} ? $ENV{$name} : undef;
 }
 
 sub _backend_error_response {

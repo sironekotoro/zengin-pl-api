@@ -42,6 +42,39 @@ subtest 'GET /api/banks/9999 returns json error' => sub {
     is($res->{json}->{error}->{code}, 'bank_not_found', 'error code is bank_not_found');
 };
 
+subtest 'GET /api/meta returns metadata json' => sub {
+    my $res = request($app, 'GET', '/api/meta');
+
+    is($res->{status}, 200, 'status is 200');
+    ok(exists $res->{json}->{api}, 'api exists');
+    ok(exists $res->{json}->{backend}, 'backend exists');
+    ok(exists $res->{json}->{data}, 'data exists');
+    is($res->{json}->{api}->{name}, 'zengin-pl-api', 'default api.name is zengin-pl-api');
+    is($res->{json}->{backend}->{class}, 'Zengin::Pl', 'backend.class is Zengin::Pl');
+    is($res->{json}->{backend}->{base_url}, TestBackend::BASE_URL(), 'backend.base_url exists');
+    is($res->{json}->{data}->{source}, TestBackend::BASE_URL(), 'data.source exists');
+    ok(!defined $res->{json}->{api}->{version}, 'api.version is null when unset');
+};
+
+subtest 'GET /api/meta reflects APP_* environment variables' => sub {
+    local $ENV{APP_NAME} = 'zengin-pl-api-cloudrun';
+    local $ENV{APP_VERSION} = '0.1.0';
+    local $ENV{APP_GIT_SHA} = 'abc1234';
+    local $ENV{APP_BUILD_TIME} = '2026-03-24T00:40:00Z';
+
+    my $meta_app = Zengin::PL::API->new(
+        backend => TestBackend->new,
+    )->to_app;
+
+    my $res = request($meta_app, 'GET', '/api/meta');
+
+    is($res->{status}, 200, 'status is 200');
+    is($res->{json}->{api}->{name}, 'zengin-pl-api-cloudrun', 'api.name reflects APP_NAME');
+    is($res->{json}->{api}->{version}, '0.1.0', 'api.version reflects APP_VERSION');
+    is($res->{json}->{api}->{git_sha}, 'abc1234', 'api.git_sha reflects APP_GIT_SHA');
+    is($res->{json}->{api}->{build_time}, '2026-03-24T00:40:00Z', 'api.build_time reflects APP_BUILD_TIME');
+};
+
 subtest 'GET /api/banks/0001/branches/001 returns branch json' => sub {
     my $res = request($app, 'GET', '/api/banks/0001/branches/001');
 
@@ -122,7 +155,11 @@ sub request {
     use strict;
     use warnings;
 
+    use constant BASE_URL => 'https://example.invalid/zengin-data';
+
     sub new { bless {}, shift }
+
+    sub base_url { return BASE_URL }
 
     sub get_bank {
         my ($self, $bank_code) = @_;
