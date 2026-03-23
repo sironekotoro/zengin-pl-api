@@ -171,7 +171,7 @@ sub _handle_meta {
     my ($self) = @_;
 
     my $backend = $self->_backend;
-    my $base_url = $self->_backend_base_url($backend);
+    my $backend_meta = $self->_backend_meta($backend);
 
     return $self->_json_response(200, {
         api => {
@@ -181,11 +181,12 @@ sub _handle_meta {
             build_time => $self->_env_or_undef('APP_BUILD_TIME'),
         },
         backend => {
-            class    => $self->{backend_class},
-            base_url => $base_url,
+            class    => $backend_meta->{class},
+            version  => $backend_meta->{version},
+            base_url => $backend_meta->{base_url},
         },
         data => {
-            source => $base_url,
+            source => $backend_meta->{source},
         },
     });
 }
@@ -237,22 +238,24 @@ sub _backend {
     return $self->{backend};
 }
 
-sub _backend_base_url {
+sub _backend_meta {
     my ($self, $backend) = @_;
 
-    return undef if !defined $backend;
-
-    return $backend->base_url if ref $backend && $backend->can('base_url');
-    return $backend->{base_url} if ref $backend eq 'HASH' && exists $backend->{base_url};
-
-    if (ref $backend) {
-        my $reftype = ref $backend;
-        no strict 'refs';
-        return $backend->{base_url} if $reftype && exists $backend->{base_url};
+    if (defined $backend && ref $backend && $backend->can('meta')) {
+        my $meta = $backend->meta;
+        return $meta if ref $meta eq 'HASH';
     }
 
-    return $ENV{ZENGIN_PL_BASE_URL} if defined $ENV{ZENGIN_PL_BASE_URL};
-    return undef;
+    return {
+        class    => $self->{backend_class},
+        version  => undef,
+        base_url => undef,
+        source   => {
+            kind       => undef,
+            revision   => undef,
+            updated_at => undef,
+        },
+    };
 }
 
 sub _parse_query_string {

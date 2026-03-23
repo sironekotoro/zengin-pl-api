@@ -51,8 +51,11 @@ subtest 'GET /api/meta returns metadata json' => sub {
     ok(exists $res->{json}->{data}, 'data exists');
     is($res->{json}->{api}->{name}, 'zengin-pl-api', 'default api.name is zengin-pl-api');
     is($res->{json}->{backend}->{class}, 'Zengin::Pl', 'backend.class is Zengin::Pl');
+    is($res->{json}->{backend}->{version}, '0.01', 'backend.version exists');
     is($res->{json}->{backend}->{base_url}, TestBackend::BASE_URL(), 'backend.base_url exists');
-    is($res->{json}->{data}->{source}, TestBackend::BASE_URL(), 'data.source exists');
+    is($res->{json}->{data}->{source}->{kind}, 'zengin-data-mirror', 'data.source.kind exists');
+    ok(exists $res->{json}->{data}->{source}->{revision}, 'data.source.revision key exists');
+    ok(exists $res->{json}->{data}->{source}->{updated_at}, 'data.source.updated_at key exists');
     ok(!defined $res->{json}->{api}->{version}, 'api.version is null when unset');
 };
 
@@ -159,7 +162,18 @@ sub request {
 
     sub new { bless {}, shift }
 
-    sub base_url { return BASE_URL }
+    sub meta {
+        return {
+            class    => 'Zengin::Pl',
+            version  => '0.01',
+            base_url => BASE_URL,
+            source   => {
+                kind       => 'zengin-data-mirror',
+                revision   => undef,
+                updated_at => undef,
+            },
+        };
+    }
 
     sub get_bank {
         my ($self, $bank_code) = @_;

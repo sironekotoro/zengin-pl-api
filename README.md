@@ -72,10 +72,15 @@
   },
   "backend": {
     "class": "Zengin::Pl",
+    "version": "0.01",
     "base_url": "https://raw.githubusercontent.com/sironekotoro/zengin-data-mirror/main/data"
   },
   "data": {
-    "source": "https://raw.githubusercontent.com/sironekotoro/zengin-data-mirror/main/data"
+    "source": {
+      "kind": "zengin-data-mirror",
+      "revision": null,
+      "updated_at": null
+    }
   }
 }
 ```
@@ -407,8 +412,8 @@ curl "https://<cloud-run-url>/api/banks/0001/branches?name=%E6%9D%B1%E4%BA%AC"
 
 この公開 URL は、将来 Slack endpoint を追加したときの Request URL 候補にもなります。
 
-`/api/meta` では、現在動作している `zengin-pl-api` の名前や version、backend class、backend の `base_url` などを確認できます。
-将来的に `zengin-pl` 側でより多くの metadata を返せるようになれば、この endpoint でも取り込めるようにする想定です。
+`/api/meta` では、`api.*` は `zengin-pl-api` 自身の情報を返し、`backend.*` と `data.source` は backend の `meta()` を取り込んで返します。
+`data.source` は、今後 `revision` や `updated_at` などを拡張しやすいようにオブジェクトで返しています。
 
 ### 課金を抑えるための最小メモ
 
