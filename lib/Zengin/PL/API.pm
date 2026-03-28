@@ -3,6 +3,7 @@ package Zengin::PL::API;
 use strict;
 use warnings;
 
+use Digest::SHA qw(hmac_sha256_hex);
 use Encode qw(decode_utf8);
 use JSON::PP ();
 use URI::Escape qw(uri_unescape);
@@ -31,6 +32,12 @@ sub handle_request {
 
     my $method = $env->{REQUEST_METHOD} || 'GET';
     my $path   = $env->{PATH_INFO}      || '/';
+
+    if ($path =~ m{\A/slack/zengin/?\z}) {
+        return $self->_handle_slack_zengin($env) if $method eq 'POST';
+
+        return $self->_plain_response(405, 'Only POST is supported');
+    }
 
     if ($method ne 'GET') {
         return $self->_json_response(405, {
@@ -67,6 +74,238 @@ sub handle_request {
             message => 'Route not found',
         },
     });
+}
+
+sub _handle_slack_zengin {
+    my ($self, $env) = @_;
+
+    my $raw_body = $self->_read_request_body($env);
+    my $verification_error = $self->_verify_slack_request($env, $raw_body);
+    return $verification_error if $verification_error;
+
+    my $params = $self->_parse_query_string($raw_body);
+    my $text   = defined $params->{text} ? $params->{text} : q{};
+
+    my $message = eval { $self->_dispatch_slack_command($text) };
+    if (my $error = $@) {
+        warn "Slack command failed: $error";
+        return $self->_slack_response('検索中にエラーが発生しました。時間をおいて再度お試しください。');
+    }
+
+    return $self->_slack_response($message);
+}
+
+sub _dispatch_slack_command {
+    my ($self, $text) = @_;
+
+    $text = q{} if !defined $text;
+    $text =~ s/\A\s+//;
+    $text =~ s/\s+\z//;
+
+    my @tokens = grep { length $_ } split /\s+/, $text;
+    return $self->_slack_usage if !@tokens || @tokens > 2;
+
+    if (@tokens == 1) {
+        return $self->_slack_lookup_bank($tokens[0]);
+    }
+
+    return $self->_slack_lookup_branch($tokens[0], $tokens[1]);
+}
+
+sub _slack_lookup_bank {
+    my ($self, $bank_term) = @_;
+
+    my ($bank, $message) = $self->_slack_resolve_bank($bank_term);
+    return $message if !$bank;
+
+    return $self->_format_slack_bank($bank);
+}
+
+sub _slack_lookup_branch {
+    my ($self, $bank_term, $branch_term) = @_;
+
+    my ($bank, $bank_message) = $self->_slack_resolve_bank($bank_term);
+    return $bank_message if !$bank;
+
+    if ($branch_term =~ /\A\d{3}\z/) {
+        my ($branch, $branch_message) = $self->_slack_find_branch($bank->{code}, $branch_term);
+        return $branch_message if !$branch;
+
+        return $self->_format_slack_bank_and_branch($bank, $branch);
+    }
+
+    my ($branches, $branch_message) = $self->_slack_search_branches($bank, $branch_term);
+    return $branch_message if !$branches;
+
+    return $self->_format_slack_branch_list($bank, $branches);
+}
+
+sub _slack_resolve_bank {
+    my ($self, $bank_term) = @_;
+
+    if ($bank_term =~ /\A\d{4}\z/) {
+        my ($bank, $error) = $self->_call_backend('get_bank', $bank_term);
+        return (undef, $self->_slack_backend_error_message) if $error;
+        return (undef, "銀行が見つかりません: $bank_term") if !$bank;
+
+        return ($self->_normalize_bank($bank), undef);
+    }
+
+    my ($banks, $error) = $self->_call_backend('search', $bank_term);
+    return (undef, $self->_slack_backend_error_message) if $error;
+
+    $banks ||= [];
+    my @banks = map { $self->_normalize_bank($_) } @{$banks};
+
+    return (undef, "銀行が見つかりません: $bank_term") if !@banks;
+    return ($banks[0], undef) if @banks == 1;
+
+    return (undef, $self->_format_slack_bank_candidates(\@banks));
+}
+
+sub _slack_find_branch {
+    my ($self, $bank_code, $branch_code) = @_;
+
+    my ($branch, $error) = $self->_call_backend('get_branch', $bank_code, $branch_code);
+    return (undef, $self->_slack_backend_error_message) if $error;
+    return (undef, "支店が見つかりません: $bank_code/$branch_code") if !$branch;
+
+    return ($self->_normalize_branch($branch), undef);
+}
+
+sub _slack_search_branches {
+    my ($self, $bank, $branch_term) = @_;
+
+    my ($branches, $error) = $self->_call_backend('search', $bank->{code}, $branch_term);
+    return (undef, $self->_slack_backend_error_message) if $error;
+
+    $branches ||= [];
+    my @branches = map { $self->_slice_fields($_, qw(code name)) } @{$branches};
+
+    return (undef, "支店が見つかりません: $bank->{code} $branch_term") if !@branches;
+
+    return (\@branches, undef);
+}
+
+sub _verify_slack_request {
+    my ($self, $env, $raw_body) = @_;
+
+    my $secret = $ENV{SLACK_SIGNING_SECRET};
+    return $self->_plain_response(500, 'SLACK_SIGNING_SECRET is not configured')
+        if !defined $secret || $secret eq q{};
+
+    my $timestamp = $env->{HTTP_X_SLACK_REQUEST_TIMESTAMP};
+    my $signature = $env->{HTTP_X_SLACK_SIGNATURE};
+
+    return $self->_plain_response(401, 'Missing Slack signature')
+        if !defined $timestamp || !defined $signature;
+
+    return $self->_plain_response(401, 'Invalid Slack timestamp')
+        if $timestamp !~ /\A\d+\z/;
+
+    return $self->_plain_response(401, 'Slack request timestamp is too old')
+        if abs(time - $timestamp) > 60 * 5;
+
+    my $base_string = join q{:}, 'v0', $timestamp, $raw_body;
+    my $expected = 'v0=' . hmac_sha256_hex($base_string, $secret);
+
+    return if $self->_secure_compare($signature, $expected);
+    return $self->_plain_response(401, 'Invalid Slack signature');
+}
+
+sub _secure_compare {
+    my ($self, $left, $right) = @_;
+
+    return if !defined $left || !defined $right;
+
+    my $diff = length($left) ^ length($right);
+    my $max = length($left) > length($right) ? length($left) : length($right);
+
+    for my $i (0 .. $max - 1) {
+        my $left_char  = $i < length($left)  ? substr($left,  $i, 1) : "\0";
+        my $right_char = $i < length($right) ? substr($right, $i, 1) : "\0";
+
+        $diff |= ord($left_char) ^ ord($right_char);
+    }
+
+    return $diff == 0;
+}
+
+sub _read_request_body {
+    my ($self, $env) = @_;
+
+    my $input = $env->{'psgi.input'};
+    return q{} if !$input;
+
+    my $length = $env->{CONTENT_LENGTH} || 0;
+    return q{} if !$length;
+
+    my $body = q{};
+    my $read = read $input, $body, $length;
+    die "Failed to read request body: $!" if !defined $read;
+
+    return $body;
+}
+
+sub _slack_usage {
+    return <<'USAGE';
+使い方:
+ /zengin 0001
+ /zengin みずほ
+ /zengin 0001 001
+ /zengin みずほ 001
+ /zengin 0001 東京
+ /zengin みずほ 東京
+USAGE
+}
+
+sub _format_slack_bank {
+    my ($self, $bank) = @_;
+
+    return join "\n",
+        '============================',
+        sprintf('銀行コード　　　　: %s', $bank->{code} // q{}),
+        sprintf('銀行名　　　　　　: %s', $bank->{name} // q{}),
+        sprintf('銀行名（ひらがな）: %s', $bank->{hira} // q{}),
+        sprintf('銀行名（カタカナ）: %s', $bank->{kana} // q{}),
+        sprintf('銀行名（ローマ字）: %s', $bank->{roma} // q{});
+}
+
+sub _format_slack_bank_and_branch {
+    my ($self, $bank, $branch) = @_;
+
+    return join "\n",
+        $self->_format_slack_bank($bank),
+        '============================',
+        sprintf('支店コード　　　　: %s', $branch->{code} // q{}),
+        sprintf('支店名　　　　　　: %s', $branch->{name} // q{}),
+        sprintf('支店名（ひらがな）: %s', $branch->{hira} // q{}),
+        sprintf('支店名（カタカナ）: %s', $branch->{kana} // q{}),
+        sprintf('支店名（ローマ字）: %s', $branch->{roma} // q{});
+}
+
+sub _format_slack_branch_list {
+    my ($self, $bank, $branches) = @_;
+
+    my @lines = map {
+        join '  ', $bank->{code} // q{}, $bank->{name} // q{}, $_->{code} // q{}, $_->{name} // q{}
+    } @{$branches};
+
+    return "```\n" . join("\n", @lines) . "\n```";
+}
+
+sub _format_slack_bank_candidates {
+    my ($self, $banks) = @_;
+
+    my @lines = map {
+        join '  ', $_->{code} // q{}, $_->{name} // q{}
+    } @{$banks};
+
+    return "銀行候補:\n```\n" . join("\n", @lines) . "\n```";
+}
+
+sub _slack_backend_error_message {
+    return '検索中にエラーが発生しました。時間をおいて再度お試しください。';
 }
 
 sub _handle_get_bank {
@@ -266,11 +505,12 @@ sub _parse_query_string {
         my ($key, $value) = split /=/, $pair, 2;
         next if !defined $key || $key eq q{};
 
-        $key   = decode_utf8(uri_unescape($key));
-        $value = defined $value ? decode_utf8(uri_unescape($value)) : q{};
-
         $key   =~ tr/+/ /;
+        $value = defined $value ? $value : q{};
         $value =~ tr/+/ /;
+
+        $key   = decode_utf8(uri_unescape($key));
+        $value = decode_utf8(uri_unescape($value));
 
         $params{$key} = $value;
     }
@@ -351,6 +591,28 @@ sub _json_response {
         $status,
         [
             'Content-Type'   => 'application/json; charset=utf-8',
+            'Content-Length' => length $body,
+        ],
+        [$body],
+    ];
+}
+
+sub _slack_response {
+    my ($self, $text) = @_;
+
+    return $self->_json_response(200, {
+        response_type => 'ephemeral',
+        text          => $text,
+    });
+}
+
+sub _plain_response {
+    my ($self, $status, $body) = @_;
+
+    return [
+        $status,
+        [
+            'Content-Type'   => 'text/plain; charset=utf-8',
             'Content-Length' => length $body,
         ],
         [$body],

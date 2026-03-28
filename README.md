@@ -2,8 +2,8 @@
 
 `zengin-pl-api` は、[`zengin-pl`](https://github.com/sironekotoro/zengin-pl) を利用して、全銀コード（金融機関コード・支店コード）データを **Web API** として提供するための Perl アプリケーションです。
 
-銀行コード・支店コードによる参照だけでなく、銀行名・支店名による検索にも対応することを想定しています。
-また、将来的には Slack Slash コマンドの入口もこのアプリケーションに同居させる予定です。
+銀行コード・支店コードによる参照だけでなく、銀行名・支店名による検索にも対応しています。
+また、Slack Slash コマンドの入口もこのアプリケーションに同居させています。
 
 ## 目的
 
@@ -11,7 +11,7 @@
 
 - Web API
 - ターミナルからの `curl` 利用
-- 将来的な Slack Slash コマンド連携
+- Slack Slash コマンド連携
 
 `zengin-pl` 自体はデータ取得・検索ロジックを担い、`zengin-pl-api` はその上に載る **薄いアダプタ層** として設計します。
 
@@ -43,9 +43,6 @@
 - `GET /api/banks?name=...`
 - `GET /api/banks/:bank_code/branches/:branch_code`
 - `GET /api/banks/:bank_code/branches?name=...`
-
-将来的には、以下の endpoint も追加予定です。
-
 - `POST /slack/zengin`
 
 ## レスポンス方針
@@ -162,9 +159,9 @@
 }
 ```
 
-## 予定する Slash コマンド仕様
+## Slash コマンド仕様
 
-将来的には、Slack から次のような入力を受け付ける想定です。
+Slack から次のような入力を受け付けます。
 
 ```text
 /zengin みずほ
@@ -283,10 +280,15 @@ curl "http://127.0.0.1:8080/api/banks/0001/branches?name=東京"
 - エラーレスポンス整理
 - API テスト追加
 
-### フェーズ3
-- Slack endpoint 実装
-- Slack 署名検証
-- Slack 向け出力整形
+### Slack Slash Command のローカル確認
+
+`SLACK_SIGNING_SECRET` を設定すると、`POST /slack/zengin` が有効になります。
+
+```bash
+export SLACK_SIGNING_SECRET='your-slack-signing-secret'
+```
+
+Slack の署名付き request は手で作りにくいため、まずは Slack App から実際に呼び出して確認するのが簡単です。
 
 ## デプロイ方針
 
@@ -469,6 +471,35 @@ curl --get --data-urlencode "name=東京" \
 ```bash
 curl "https://<cloud-run-url>/api/banks?name=%E3%81%BF%E3%81%9A%E3%81%BB"
 curl "https://<cloud-run-url>/api/banks/0001/branches?name=%E6%9D%B1%E4%BA%AC"
+```
+
+## Slack Slash Command の設定
+
+Cloud Run 上の公開 URL を使って、Slack App に `/zengin` を設定できます。
+
+### Slack App 側で必要な手順
+
+1. Slack App を作成する
+2. `Slash Commands` で `/zengin` を追加する
+3. Request URL に `https://<cloud-run-url>/slack/zengin` を設定する
+4. `Basic Information` の `Signing Secret` を控える
+5. App を workspace に install する
+
+### Cloud Run 側で必要な環境変数
+
+- `SLACK_SIGNING_SECRET`
+
+verification token ではなく、`X-Slack-Signature` / `X-Slack-Request-Timestamp` と Signing Secret を使って検証します。
+
+### 利用例
+
+```text
+/zengin 0001
+/zengin みずほ
+/zengin 0001 001
+/zengin みずほ 001
+/zengin 0001 東京
+/zengin みずほ 東京
 ```
 
 この公開 URL は、将来 Slack endpoint を追加したときの Request URL 候補にもなります。
