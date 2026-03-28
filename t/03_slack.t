@@ -16,6 +16,7 @@ use URI::Escape qw(uri_escape_utf8);
 use Zengin::PL::API;
 
 local $ENV{SLACK_SIGNING_SECRET} = 'test-signing-secret';
+local $ENV{SLACK_SIGNING_SECRETS} = undef;
 
 my $app = Zengin::PL::API->new(
     backend => TestBackend->new,
@@ -26,6 +27,66 @@ subtest 'POST /slack/zengin rejects invalid signature' => sub {
 
     is($res->{status}, 401, 'status is 401');
     like($res->{body}, qr/Invalid Slack signature/, 'invalid signature is rejected');
+};
+
+subtest 'POST /slack/zengin accepts single legacy signing secret' => sub {
+    local $ENV{SLACK_SIGNING_SECRET} = 'legacy-secret';
+    local $ENV{SLACK_SIGNING_SECRETS} = undef;
+
+    my $legacy_app = Zengin::PL::API->new(
+        backend => TestBackend->new,
+    )->to_app;
+
+    my $res = slack_request($legacy_app, '0001', signing_secret => 'legacy-secret');
+
+    is($res->{status}, 200, 'status is 200');
+    like($res->{json}->{text}, qr/銀行コード　　　　: 0001/, 'legacy single secret still works');
+};
+
+subtest 'POST /slack/zengin accepts any secret from SLACK_SIGNING_SECRETS' => sub {
+    local $ENV{SLACK_SIGNING_SECRET} = 'legacy-secret';
+    local $ENV{SLACK_SIGNING_SECRETS} = ' personal-secret, work-secret , ';
+
+    my $multi_secret_app = Zengin::PL::API->new(
+        backend => TestBackend->new,
+    )->to_app;
+
+    my $res = slack_request($multi_secret_app, '0001', signing_secret => 'work-secret');
+
+    is($res->{status}, 200, 'status is 200');
+    like($res->{json}->{text}, qr/銀行コード　　　　: 0001/, 'matching secret from list is accepted');
+};
+
+subtest 'POST /slack/zengin rejects when no configured secret matches' => sub {
+    local $ENV{SLACK_SIGNING_SECRET} = 'legacy-secret';
+    local $ENV{SLACK_SIGNING_SECRETS} = 'personal-secret,work-secret';
+
+    my $multi_secret_app = Zengin::PL::API->new(
+        backend => TestBackend->new,
+    )->to_app;
+
+    my $res = slack_request($multi_secret_app, '0001', signing_secret => 'unknown-secret');
+
+    is($res->{status}, 401, 'status is 401');
+    like($res->{body}, qr/Invalid Slack signature/, 'unknown secret is rejected');
+};
+
+subtest 'POST /slack/zengin fails safely when no secret is configured' => sub {
+    local $ENV{SLACK_SIGNING_SECRET} = undef;
+    local $ENV{SLACK_SIGNING_SECRETS} = undef;
+
+    my $no_secret_app = Zengin::PL::API->new(
+        backend => TestBackend->new,
+    )->to_app;
+
+    my $res = slack_request($no_secret_app, '0001', signing_secret => 'test-signing-secret');
+
+    is($res->{status}, 500, 'status is 500');
+    like(
+        $res->{body},
+        qr/SLACK_SIGNING_SECRET or SLACK_SIGNING_SECRETS is not configured/,
+        'missing secret configuration fails safely'
+    );
 };
 
 subtest 'POST /slack/zengin returns bank detail' => sub {
@@ -95,7 +156,8 @@ sub slack_request {
         'user_id=U0001';
 
     my $timestamp = $opts{timestamp} || time;
-    my $signature = 'v0=' . hmac_sha256_hex("v0:$timestamp:$body", $ENV{SLACK_SIGNING_SECRET});
+    my $signing_secret = $opts{signing_secret} || $ENV{SLACK_SIGNING_SECRET};
+    my $signature = 'v0=' . hmac_sha256_hex("v0:$timestamp:$body", $signing_secret);
     $signature = 'v0=invalid' if $opts{invalid_signature};
 
     return request(

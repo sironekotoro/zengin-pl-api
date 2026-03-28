@@ -225,9 +225,9 @@ sub _sort_branches_for_slack {
 sub _verify_slack_request {
     my ($self, $env, $raw_body) = @_;
 
-    my $secret = $ENV{SLACK_SIGNING_SECRET};
-    return $self->_plain_response(500, 'SLACK_SIGNING_SECRET is not configured')
-        if !defined $secret || $secret eq q{};
+    my @secrets = $self->_slack_signing_secrets;
+    return $self->_plain_response(500, 'SLACK_SIGNING_SECRET or SLACK_SIGNING_SECRETS is not configured')
+        if !@secrets;
 
     my $timestamp = $env->{HTTP_X_SLACK_REQUEST_TIMESTAMP};
     my $signature = $env->{HTTP_X_SLACK_SIGNATURE};
@@ -242,10 +242,30 @@ sub _verify_slack_request {
         if abs(time - $timestamp) > 60 * 5;
 
     my $base_string = join q{:}, 'v0', $timestamp, $raw_body;
-    my $expected = 'v0=' . hmac_sha256_hex($base_string, $secret);
 
-    return if $self->_secure_compare($signature, $expected);
+    for my $secret (@secrets) {
+        my $expected = 'v0=' . hmac_sha256_hex($base_string, $secret);
+        return if $self->_secure_compare($signature, $expected);
+    }
+
     return $self->_plain_response(401, 'Invalid Slack signature');
+}
+
+sub _slack_signing_secrets {
+    my ($self) = @_;
+
+    if (defined $ENV{SLACK_SIGNING_SECRETS} && $ENV{SLACK_SIGNING_SECRETS} ne q{}) {
+        my @secrets = grep { length $_ } map {
+            s/\A\s+//;
+            s/\s+\z//;
+            $_;
+        } split /,/, $ENV{SLACK_SIGNING_SECRETS};
+
+        return @secrets;
+    }
+
+    return () if !defined $ENV{SLACK_SIGNING_SECRET} || $ENV{SLACK_SIGNING_SECRET} eq q{};
+    return ($ENV{SLACK_SIGNING_SECRET});
 }
 
 sub _secure_compare {
