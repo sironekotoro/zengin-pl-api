@@ -157,6 +157,7 @@ sub _slack_resolve_bank {
 
     $banks ||= [];
     my @banks = map { $self->_normalize_bank($_) } @{$banks};
+    @banks = $self->_sort_banks_for_slack($bank_term, @banks);
 
     return (undef, "銀行が見つかりません: $bank_term") if !@banks;
     return ($banks[0], undef) if @banks == 1;
@@ -182,10 +183,43 @@ sub _slack_search_branches {
 
     $branches ||= [];
     my @branches = map { $self->_slice_fields($_, qw(code name)) } @{$branches};
+    @branches = $self->_sort_branches_for_slack(@branches);
 
     return (undef, "支店が見つかりません: $bank->{code} $branch_term") if !@branches;
 
     return (\@branches, undef);
+}
+
+sub _sort_banks_for_slack {
+    my ($self, $term, @banks) = @_;
+
+    return sort {
+        $self->_slack_bank_match_rank($a, $term) <=> $self->_slack_bank_match_rank($b, $term)
+            || (($a->{code} // q{}) cmp ($b->{code} // q{}))
+            || (($a->{name} // q{}) cmp ($b->{name} // q{}))
+    } @banks;
+}
+
+sub _slack_bank_match_rank {
+    my ($self, $bank, $term) = @_;
+
+    return 1 if !defined $term || $term eq q{};
+
+    for my $field (qw(code name hira kana roma)) {
+        next if !defined $bank->{$field};
+        return 0 if $bank->{$field} eq $term;
+    }
+
+    return 1;
+}
+
+sub _sort_branches_for_slack {
+    my ($self, @branches) = @_;
+
+    return sort {
+        (($a->{code} // q{}) cmp ($b->{code} // q{}))
+            || (($a->{name} // q{}) cmp ($b->{name} // q{}))
+    } @branches;
 }
 
 sub _verify_slack_request {
@@ -289,7 +323,11 @@ sub _format_slack_branch_list {
     my ($self, $bank, $branches) = @_;
 
     my @lines = map {
-        join '  ', $bank->{code} // q{}, $bank->{name} // q{}, $_->{code} // q{}, $_->{name} // q{}
+        sprintf '%-4s  %s  %-3s  %s',
+            $bank->{code} // q{},
+            $bank->{name} // q{},
+            $_->{code} // q{},
+            $_->{name} // q{}
     } @{$branches};
 
     return "```\n" . join("\n", @lines) . "\n```";
@@ -299,7 +337,9 @@ sub _format_slack_bank_candidates {
     my ($self, $banks) = @_;
 
     my @lines = map {
-        join '  ', $_->{code} // q{}, $_->{name} // q{}
+        sprintf '%-4s  %s',
+            $_->{code} // q{},
+            $_->{name} // q{}
     } @{$banks};
 
     return "銀行候補:\n```\n" . join("\n", @lines) . "\n```";

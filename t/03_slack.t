@@ -41,6 +41,18 @@ subtest 'POST /slack/zengin returns bank detail' => sub {
     like($res->{json}->{text}, qr/銀行名（ローマ字）: mizuho/, 'bank roma label is included');
 };
 
+subtest 'POST /slack/zengin returns sorted bank candidates in code block' => sub {
+    my $res = slack_request($app, 'みずほ');
+
+    is($res->{status}, 200, 'status is 200');
+    like($res->{json}->{text}, qr/\A銀行候補:\n```/m, 'bank candidates are wrapped in code block');
+    like(
+        $res->{json}->{text},
+        qr/0001\s+みずほ\n0289\s+みずほ信託\n4859\s+埼玉みずほ農協/s,
+        'bank candidates are ordered by exact match then code'
+    );
+};
+
 subtest 'POST /slack/zengin returns bank and branch detail' => sub {
     my $res = slack_request($app, '0001 001');
 
@@ -55,8 +67,11 @@ subtest 'POST /slack/zengin returns branch list' => sub {
 
     is($res->{status}, 200, 'status is 200');
     like($res->{json}->{text}, qr/^```/m, 'branch list is wrapped in code block');
-    like($res->{json}->{text}, qr/0001  みずほ  001  東京営業部/, 'branch list contains first branch');
-    like($res->{json}->{text}, qr/0001  みずほ  078  東京法人営業部/, 'branch list contains second branch');
+    like(
+        $res->{json}->{text},
+        qr/0001\s+みずほ\s+001\s+東京営業部\n0001\s+みずほ\s+078\s+東京法人営業部\n0001\s+みずほ\s+110\s+東京中央/s,
+        'branch list is ordered by branch code'
+    );
 };
 
 subtest 'POST /slack/zengin returns usage for invalid input' => sub {
@@ -183,11 +198,32 @@ sub request {
 
             return [
                 {
+                    code => '777',
+                    name => '東京都庁出張所',
+                    hira => 'とうきょうとちょう',
+                    kana => 'トウキョウトチョウ',
+                    roma => 'toukyoutotyou',
+                },
+                {
+                    code => '110',
+                    name => '東京中央',
+                    hira => 'とうきょうちゅうおう',
+                    kana => 'トウキョウチュウオウ',
+                    roma => 'toukyouchuuou',
+                },
+                {
                     code => '001',
                     name => '東京営業部',
                     hira => 'とうきよう',
                     kana => 'トウキヨウ',
                     roma => 'toukiyou',
+                },
+                {
+                    code => '622',
+                    name => '東京中央市場内出張所',
+                    hira => 'とうきょうちゅうおうしじょうない',
+                    kana => 'トウキョウチュウオウシジョウナイ',
+                    roma => 'toukyouchuuousijounai',
                 },
                 {
                     code => '078',
@@ -196,12 +232,33 @@ sub request {
                     kana => 'トウキヨウホウジン',
                     roma => 'toukiyouhoujin',
                 },
+                {
+                    code => '253',
+                    name => '東京ファッションタウン出張所',
+                    hira => 'とうきょうふぁっしょんたうん',
+                    kana => 'トウキョウファッションタウン',
+                    roma => 'toukyoufassyontown',
+                },
             ];
         }
 
         return [] if $bank_term ne 'みずほ';
 
         return [
+            {
+                code => '4859',
+                name => '埼玉みずほ農協',
+                hira => 'さいたまみずほのうきょう',
+                kana => 'サイタマミズホノウキョウ',
+                roma => 'saitamamizuho',
+            },
+            {
+                code => '0289',
+                name => 'みずほ信託',
+                hira => 'みずほしんたく',
+                kana => 'ミズホシンタク',
+                roma => 'mizuhoshintaku',
+            },
             {
                 code => '0001',
                 name => 'みずほ',
