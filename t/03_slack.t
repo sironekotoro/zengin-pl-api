@@ -1,5 +1,9 @@
 use strict;
 use warnings;
+use utf8;
+
+binmode STDOUT, ':encoding(UTF-8)';
+binmode STDERR, ':encoding(UTF-8)';
 
 use FindBin;
 use lib "$FindBin::Bin/../lib";
@@ -29,8 +33,12 @@ subtest 'POST /slack/zengin returns bank detail' => sub {
 
     is($res->{status}, 200, 'status is 200');
     is($res->{json}->{response_type}, 'ephemeral', 'response is ephemeral');
+    like($res->{headers}->{'Content-Type'}, qr/\Aapplication\/json; charset=utf-8\z/, 'content type is utf-8 json');
     like($res->{json}->{text}, qr/銀行コード　　　　: 0001/, 'bank code is included');
     like($res->{json}->{text}, qr/銀行名　　　　　　: みずほ/, 'bank name is included');
+    like($res->{json}->{text}, qr/銀行名（ひらがな）: みずほ/, 'bank hira label is included');
+    like($res->{json}->{text}, qr/銀行名（カタカナ）: ミズホ/, 'bank kana label is included');
+    like($res->{json}->{text}, qr/銀行名（ローマ字）: mizuho/, 'bank roma label is included');
 };
 
 subtest 'POST /slack/zengin returns bank and branch detail' => sub {

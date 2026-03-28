@@ -2,6 +2,7 @@ package Zengin::PL::API;
 
 use strict;
 use warnings;
+use utf8;
 
 use Digest::SHA qw(hmac_sha256_hex);
 use Encode qw(decode_utf8);
