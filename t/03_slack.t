@@ -123,6 +123,14 @@ subtest 'POST /slack/zengin returns bank and branch detail' => sub {
     like($res->{json}->{text}, qr/支店名　　　　　　: 東京営業部/, 'branch name is included');
 };
 
+subtest 'POST /slack/zengin resolves exact bank name before branch code lookup' => sub {
+    my $res = slack_request($app, 'みずほ 001');
+
+    is($res->{status}, 200, 'status is 200');
+    like($res->{json}->{text}, qr/銀行コード　　　　: 0001/, 'exact bank name resolves to 0001');
+    like($res->{json}->{text}, qr/支店コード　　　　: 001/, 'branch detail is returned');
+};
+
 subtest 'POST /slack/zengin returns branch list' => sub {
     my $res = slack_request($app, '0001 東京');
 
@@ -133,6 +141,19 @@ subtest 'POST /slack/zengin returns branch list' => sub {
         qr/0001\s+みずほ\s+001\s+東京営業部\n0001\s+みずほ\s+078\s+東京法人営業部\n0001\s+みずほ\s+110\s+東京中央/s,
         'branch list is ordered by branch code'
     );
+};
+
+subtest 'POST /slack/zengin resolves exact bank name before branch name lookup' => sub {
+    my $res = slack_request($app, 'みずほ 横浜');
+
+    is($res->{status}, 200, 'status is 200');
+    like($res->{json}->{text}, qr/^```/m, 'branch list is wrapped in code block');
+    like(
+        $res->{json}->{text},
+        qr/0001\s+みずほ\s+510\s+横浜駅前支店\n0001\s+みずほ\s+520\s+横浜支店/s,
+        'branch search is limited to the exact matched bank'
+    );
+    unlike($res->{json}->{text}, qr/0289\s+みずほ信託/, 'cross-bank results are not included');
 };
 
 subtest 'POST /slack/zengin returns usage for invalid input' => sub {
@@ -256,7 +277,7 @@ sub request {
         my ($self, $bank_term, $branch_term) = @_;
 
         if (defined $branch_term) {
-            return [] if $bank_term ne '0001' || $branch_term ne '東京';
+            return [] if $bank_term ne '0001';
 
             return [
                 {
@@ -301,7 +322,26 @@ sub request {
                     kana => 'トウキョウファッションタウン',
                     roma => 'toukyoufassyontown',
                 },
-            ];
+            ] if $branch_term eq '東京';
+
+            return [
+                {
+                    code => '520',
+                    name => '横浜支店',
+                    hira => 'よこはま',
+                    kana => 'ヨコハマ',
+                    roma => 'yokohama',
+                },
+                {
+                    code => '510',
+                    name => '横浜駅前支店',
+                    hira => 'よこはまえきまえ',
+                    kana => 'ヨコハマエキマエ',
+                    roma => 'yokohamaekimae',
+                },
+            ] if $branch_term eq '横浜';
+
+            return [];
         }
 
         return [] if $bank_term ne 'みずほ';

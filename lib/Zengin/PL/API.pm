@@ -125,7 +125,10 @@ sub _slack_lookup_bank {
 sub _slack_lookup_branch {
     my ($self, $bank_term, $branch_term) = @_;
 
-    my ($bank, $bank_message) = $self->_slack_resolve_bank($bank_term);
+    my ($bank, $bank_message) = $self->_slack_resolve_bank(
+        $bank_term,
+        prefer_exact_name => 1,
+    );
     return $bank_message if !$bank;
 
     if ($branch_term =~ /\A\d{3}\z/) {
@@ -142,7 +145,7 @@ sub _slack_lookup_branch {
 }
 
 sub _slack_resolve_bank {
-    my ($self, $bank_term) = @_;
+    my ($self, $bank_term, %opts) = @_;
 
     if ($bank_term =~ /\A\d{4}\z/) {
         my ($bank, $error) = $self->_call_backend('get_bank', $bank_term);
@@ -161,6 +164,14 @@ sub _slack_resolve_bank {
 
     return (undef, "銀行が見つかりません: $bank_term") if !@banks;
     return ($banks[0], undef) if @banks == 1;
+
+    if ($opts{prefer_exact_name}) {
+        my @exact_name_banks = grep {
+            defined $_->{name} && $_->{name} eq $bank_term
+        } @banks;
+
+        return ($exact_name_banks[0], undef) if @exact_name_banks == 1;
+    }
 
     return (undef, $self->_format_slack_bank_candidates(\@banks));
 }
