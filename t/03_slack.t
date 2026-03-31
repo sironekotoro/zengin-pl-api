@@ -102,6 +102,27 @@ subtest 'POST /slack/zengin returns bank detail' => sub {
     like($res->{json}->{text}, qr/銀行名（ローマ字）: mizuho/, 'bank roma label is included');
 };
 
+subtest 'POST /slack/zengin returns help with metadata' => sub {
+    local $ENV{APP_NAME} = 'zengin-pl-api-cloudrun';
+    local $ENV{APP_VERSION} = '0.1.0';
+    local $ENV{APP_GIT_SHA} = 'abc1234';
+    local $ENV{APP_BUILD_TIME} = '2026-03-24T00:40:00Z';
+
+    my $res = slack_request($app, 'help');
+
+    is($res->{status}, 200, 'status is 200');
+    like($res->{json}->{text}, qr/使い方:/, 'usage header is included');
+    like($res->{json}->{text}, qr!/zengin help!, 'help command is included');
+    like($res->{json}->{text}, qr/メタ情報:/, 'meta section is included');
+    like($res->{json}->{text}, qr/アプリ名　　　　　: zengin-pl-api-cloudrun/, 'app name is included');
+    like($res->{json}->{text}, qr/アプリ版　　　　　: 0\.1\.0/, 'app version is included');
+    like($res->{json}->{text}, qr/GitHub SHA　　　　: abc1234/, 'git sha is included');
+    like($res->{json}->{text}, qr/ビルド日時　　　　: 2026-03-24T00:40:00Z/, 'build time is included');
+    like($res->{json}->{text}, qr/backend class　　 : Zengin::Pl/, 'backend class is included');
+    like($res->{json}->{text}, qr/data source kind　: zengin-data-mirror/, 'data source kind is included');
+    like($res->{json}->{text}, qr/data base_url　　 : https:\/\/example\.invalid\/zengin-data/, 'data base_url is included');
+};
+
 subtest 'POST /slack/zengin returns sorted bank candidates in code block' => sub {
     my $res = slack_request($app, 'みずほ');
 
@@ -161,6 +182,7 @@ subtest 'POST /slack/zengin returns usage for invalid input' => sub {
 
     is($res->{status}, 200, 'status is 200');
     like($res->{json}->{text}, qr/使い方:/, 'usage is returned');
+    like($res->{json}->{text}, qr!/zengin help!, 'usage contains help');
     like($res->{json}->{text}, qr!/zengin 0001!, 'usage contains examples');
 };
 

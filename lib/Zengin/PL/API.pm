@@ -107,6 +107,7 @@ sub _dispatch_slack_command {
     return $self->_slack_usage if !@tokens || @tokens > 2;
 
     if (@tokens == 1) {
+        return $self->_slack_help if $tokens[0] eq 'help';
         return $self->_slack_lookup_bank($tokens[0]);
     }
 
@@ -314,15 +315,47 @@ sub _read_request_body {
 }
 
 sub _slack_usage {
-    return <<'USAGE';
-使い方:
- /zengin 0001
- /zengin みずほ
- /zengin 0001 001
- /zengin みずほ 001
- /zengin 0001 東京
- /zengin みずほ 東京
-USAGE
+    my ($self) = @_;
+
+    return join "\n",
+        '使い方:',
+        ' /zengin help',
+        ' /zengin 0001',
+        ' /zengin みずほ',
+        ' /zengin 0001 001',
+        ' /zengin みずほ 001',
+        ' /zengin 0001 東京',
+        ' /zengin みずほ 東京';
+}
+
+sub _slack_help {
+    my ($self) = @_;
+
+    my $backend_meta = $self->_backend_meta($self->_backend);
+    my @lines = (
+        $self->_slack_usage,
+        q{},
+        'メタ情報:',
+        sprintf(' アプリ名　　　　　: %s', defined $ENV{APP_NAME} ? $ENV{APP_NAME} : 'zengin-pl-api'),
+        sprintf(' アプリ版　　　　　: %s', $self->_env_or_dash('APP_VERSION')),
+        sprintf(' GitHub SHA　　　　: %s', $self->_env_or_dash('APP_GIT_SHA')),
+        sprintf(' ビルド日時　　　　: %s', $self->_env_or_dash('APP_BUILD_TIME')),
+        sprintf(' backend class　　 : %s', defined $backend_meta->{class} ? $backend_meta->{class} : '-'),
+        sprintf(' backend version　 : %s', defined $backend_meta->{version} ? $backend_meta->{version} : '-'),
+        sprintf(' data source kind　: %s', defined $backend_meta->{source}->{kind} ? $backend_meta->{source}->{kind} : '-'),
+        sprintf(' data updated_at　 : %s', defined $backend_meta->{source}->{updated_at} ? $backend_meta->{source}->{updated_at} : '-'),
+        sprintf(' data revision　　 : %s', defined $backend_meta->{source}->{revision} ? $backend_meta->{source}->{revision} : '-'),
+        sprintf(' data base_url　　 : %s', defined $backend_meta->{base_url} ? $backend_meta->{base_url} : '-'),
+    );
+
+    return join "\n", @lines;
+}
+
+sub _env_or_dash {
+    my ($self, $name) = @_;
+
+    my $value = $self->_env_or_undef($name);
+    return defined $value ? $value : '-';
 }
 
 sub _format_slack_bank {

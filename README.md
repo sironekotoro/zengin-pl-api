@@ -164,6 +164,7 @@
 Slack から次のような入力を受け付けます。
 
 ```text
+/zengin help
 /zengin みずほ
 /zengin 0001
 /zengin 0001 001
@@ -174,6 +175,7 @@ Slack から次のような入力を受け付けます。
 
 解釈ルールは以下を想定しています。
 
+- 1引数かつ `help`: ヘルプとメタ情報表示
 - 1引数: 銀行検索
 - 2引数かつ第2引数が3桁数字: 支店コード検索
 - 2引数かつ第2引数が文字列: 支店名検索
@@ -507,6 +509,7 @@ verification token ではなく、`X-Slack-Signature` / `X-Slack-Request-Timesta
 ### 利用例
 
 ```text
+/zengin help
 /zengin 0001
 /zengin みずほ
 /zengin 0001 001
@@ -514,6 +517,8 @@ verification token ではなく、`X-Slack-Signature` / `X-Slack-Request-Timesta
 /zengin 0001 東京
 /zengin みずほ 東京
 ```
+
+`/zengin help` では使い方に加えて、`/api/meta` 相当のメタ情報の一部を Slack 向けに整形して返します。
 
 この公開 URL は、将来 Slack endpoint を追加したときの Request URL 候補にもなります。
 
