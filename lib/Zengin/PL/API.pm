@@ -500,14 +500,24 @@ sub _handle_search_branches {
         });
     }
 
-    my ($branches, $error) = $self->_call_backend('search', $bank_code, $name);
+    my ($branches, $error) = $self->_call_backend('get_branches', $bank_code);
     return $self->_backend_error_response($error) if $error;
 
     $branches ||= [];
+    my $branch_rx = qr/\Q$name\E/;
+    my @branches = grep {
+        (defined $_->{name} && $_->{name} =~ $branch_rx)
+            || (defined $_->{kana} && $_->{kana} =~ $branch_rx)
+            || (defined $_->{hira} && $_->{hira} =~ $branch_rx)
+            || (defined $_->{code} && $_->{code} =~ $branch_rx)
+    } @{$branches};
+    @branches = sort {
+        ($a->{code} // q{}) cmp ($b->{code} // q{})
+    } @branches;
 
     return $self->_json_response(200, {
         bank     => $self->_slice_fields($bank, qw(code name)),
-        branches => [map { $self->_slice_fields($_, qw(code name)) } @{$branches}],
+        branches => [map { $self->_slice_fields($_, qw(code name)) } @branches],
     });
 }
 
