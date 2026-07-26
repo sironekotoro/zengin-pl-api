@@ -54,9 +54,29 @@ jobs:
         run: |
           echo "APP_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
+      - name: Resolve zengin-pl revision
+        run: |
+          ZENGIN_PL_GIT_REF="$(
+            git ls-remote \
+              https://github.com/sironekotoro/zengin-pl.git \
+              refs/heads/master |
+            awk '{print $1}'
+          )"
+
+          if ! printf '%s' "$ZENGIN_PL_GIT_REF" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "Failed to resolve a valid zengin-pl revision" >&2
+            exit 1
+          fi
+
+          echo "Using zengin-pl revision: $ZENGIN_PL_GIT_REF"
+          echo "ZENGIN_PL_GIT_REF=$ZENGIN_PL_GIT_REF" >> "$GITHUB_ENV"
+
       - name: Build image
         run: |
-          docker build -t "${IMAGE}" .
+          docker build \
+            --build-arg ZENGIN_PL_GIT_REF="${ZENGIN_PL_GIT_REF}" \
+            -t "${IMAGE}" \
+            .
 
       - name: Push image
         run: |
