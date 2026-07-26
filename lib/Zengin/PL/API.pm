@@ -503,14 +503,14 @@ sub _handle_search_branches {
     my ($branches, $error) = $self->_call_backend('get_branches', $bank_code);
     return $self->_backend_error_response($error) if $error;
 
-    $branches ||= [];
+    $branches ||= {};
     my $branch_rx = qr/\Q$name\E/;
     my @branches = grep {
         (defined $_->{name} && $_->{name} =~ $branch_rx)
             || (defined $_->{kana} && $_->{kana} =~ $branch_rx)
             || (defined $_->{hira} && $_->{hira} =~ $branch_rx)
             || (defined $_->{code} && $_->{code} =~ $branch_rx)
-    } @{$branches};
+    } values %{$branches};
     @branches = sort {
         ($a->{code} // q{}) cmp ($b->{code} // q{})
     } @branches;

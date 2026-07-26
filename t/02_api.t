@@ -103,11 +103,15 @@ subtest 'GET /api/banks/0001/branches?name=東京 returns branches array' => sub
     is($res->{status}, 200, 'status is 200');
     ok(ref $res->{json}->{branches} eq 'ARRAY', 'branches is an array');
     ok(@{$res->{json}->{branches}} >= 1, 'branches contains at least one item');
+    is($res->{json}->{branches}->[0]->{code}, '001', 'hash-backed branch search returns the matching branch');
 };
 
 subtest 'branch search filters the fetched branch list without backend search' => sub {
     my $backend = CountingBackend->new;
     my $counting_app = Zengin::PL::API->new(backend => $backend)->to_app;
+
+    is(ref $backend->get_branches('0001'), 'HASH', 'test backend matches Zengin::Pl get_branches return type');
+    $backend->{calls}->{get_branches} = 0;
 
     my @cases = (
         ['name', '東京', ['001']],
@@ -321,17 +325,17 @@ sub request {
     sub get_branches {
         my ($self, $bank_code) = @_;
 
-        return [] if $bank_code ne '0001';
+        return {} if $bank_code ne '0001';
 
-        return [
-            {
+        return {
+            '001' => {
                 code => '001',
                 name => '東京営業部',
                 hira => 'とうきよう',
                 kana => 'トウキヨウ',
                 roma => 'toukiyou',
             },
-        ];
+        };
     }
 }
 
@@ -361,11 +365,11 @@ sub request {
         $self->{calls}->{get_branches}++;
         die "branch backend failed\n" if $self->{fail_get_branches};
 
-        return [
-            {code => '010', name => '名古屋支店', hira => 'なごやしてん', kana => 'ナゴヤシテン'},
-            {code => '002', name => '大阪支店', hira => 'おおさかしてん', kana => 'オオサカシテン'},
-            {code => '001', name => '東京営業部', hira => 'とうきようえいぎょうぶ', kana => 'トウキヨウエイギヨウブ'},
-        ];
+        return {
+            '010' => {code => '010', name => '名古屋支店', hira => 'なごやしてん', kana => 'ナゴヤシテン'},
+            '002' => {code => '002', name => '大阪支店', hira => 'おおさかしてん', kana => 'オオサカシテン'},
+            '001' => {code => '001', name => '東京営業部', hira => 'とうきようえいぎょうぶ', kana => 'トウキヨウエイギヨウブ'},
+        };
     }
 
     sub search {
