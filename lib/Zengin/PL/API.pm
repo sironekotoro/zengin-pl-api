@@ -687,12 +687,14 @@ sub _env_or_undef {
 sub _backend_error_response {
     my ($self, $error) = @_;
 
+    $error = 'Unknown backend error' if !defined $error || $error eq q{};
     chomp $error;
+    warn "Backend request failed: $error\n";
 
     return $self->_json_response(500, {
         error => {
             code    => 'backend_error',
-            message => $error,
+            message => 'Backend request failed',
         },
     });
 }

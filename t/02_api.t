@@ -175,15 +175,22 @@ subtest 'branch search keeps existing error responses' => sub {
 
     my $error_backend = CountingBackend->new(fail_get_branches => 1);
     my $error_app = Zengin::PL::API->new(backend => $error_backend)->to_app;
-    my $backend_error = request(
-        $error_app,
-        'GET',
-        '/api/banks/0001/branches',
-        'name=' . uri_escape_utf8('東京'),
-    );
+    my ($backend_error, $backend_warning);
+    {
+        local $SIG{__WARN__} = sub { $backend_warning .= join q{}, @_ };
+        $backend_error = request(
+            $error_app,
+            'GET',
+            '/api/banks/0001/branches',
+            'name=' . uri_escape_utf8('東京'),
+        );
+    }
 
     is($backend_error->{status}, 500, 'backend error returns 500');
     is($backend_error->{json}->{error}->{code}, 'backend_error', 'backend error code is unchanged');
+    is($backend_error->{json}->{error}->{message}, 'Backend request failed', 'backend details are hidden from clients');
+    unlike($backend_error->{body}, qr/branch backend failed/, 'backend details are absent from the response body');
+    like($backend_warning, qr/branch backend failed/, 'backend details are retained in server logs');
     is($error_backend->{calls}->{get_bank}, 1, 'backend error request checks the bank once');
     is($error_backend->{calls}->{get_branches}, 1, 'backend error request fetches branches once');
     is($error_backend->{calls}->{search} || 0, 0, 'backend error request does not call search');

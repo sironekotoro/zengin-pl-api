@@ -15,16 +15,18 @@ RUN apt-get update \
 
 RUN cpanm App::cpanminus
 
-COPY cpanfile /app/cpanfile
+COPY cpanfile zengin-pl.ref /app/
 RUN cpanm --installdeps /app
 
 ARG ZENGIN_PL_GIT_URL=https://github.com/sironekotoro/zengin-pl.git
 ARG ZENGIN_PL_GIT_REF=
-RUN git clone --depth 1 "${ZENGIN_PL_GIT_URL}" /tmp/zengin-pl \
-    && if [ -n "${ZENGIN_PL_GIT_REF}" ]; then \
-        git -C /tmp/zengin-pl fetch --depth 1 origin "${ZENGIN_PL_GIT_REF}" \
-        && git -C /tmp/zengin-pl checkout FETCH_HEAD; \
+RUN ZENGIN_PL_RESOLVED_REF="${ZENGIN_PL_GIT_REF}" \
+    && if [ -z "${ZENGIN_PL_RESOLVED_REF}" ]; then \
+        ZENGIN_PL_RESOLVED_REF="$(tr -d '\r\n' < /app/zengin-pl.ref)"; \
     fi \
+    && git clone --depth 1 "${ZENGIN_PL_GIT_URL}" /tmp/zengin-pl \
+    && git -C /tmp/zengin-pl fetch --depth 1 origin "${ZENGIN_PL_RESOLVED_REF}" \
+    && git -C /tmp/zengin-pl checkout --detach FETCH_HEAD \
     && cpanm --installdeps /tmp/zengin-pl \
     && cpanm /tmp/zengin-pl \
     && rm -rf /tmp/zengin-pl

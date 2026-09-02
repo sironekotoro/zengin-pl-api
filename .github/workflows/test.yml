@@ -23,6 +23,11 @@ jobs:
         run: |
           prove -lr t
 
+      - name: Validate zengin-pl revision pin
+        run: |
+          test "$(wc -l < zengin-pl.ref)" -eq 1
+          grep -Eq '^[0-9a-f]{40}$' zengin-pl.ref
+
       - name: Validate OpenAPI document
         run: |
           npx --yes @redocly/cli@2.50.0 lint openapi.yaml --extends=spec

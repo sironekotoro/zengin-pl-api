@@ -56,15 +56,11 @@ jobs:
 
       - name: Resolve zengin-pl revision
         run: |
-          ZENGIN_PL_GIT_REF="$(
-            git ls-remote \
-              https://github.com/sironekotoro/zengin-pl.git \
-              refs/heads/master |
-            awk '{print $1}'
-          )"
+          ZENGIN_PL_GIT_REF="$(cat zengin-pl.ref)"
 
-          if ! printf '%s' "$ZENGIN_PL_GIT_REF" | grep -Eq '^[0-9a-f]{40}$'; then
-            echo "Failed to resolve a valid zengin-pl revision" >&2
+          if [ "$(wc -l < zengin-pl.ref)" -ne 1 ] || \
+            ! printf '%s' "$ZENGIN_PL_GIT_REF" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "zengin-pl.ref must contain exactly one 40-character commit SHA" >&2
             exit 1
           fi
 
