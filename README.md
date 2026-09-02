@@ -379,6 +379,7 @@ export REGION='asia-northeast1'
 export REPOSITORY='zengin-pl-api'
 export IMAGE="asia-northeast1-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/zengin-pl-api:latest"
 export SERVICE='zengin-pl-api'
+export MAX_INSTANCES='3'
 
 gcloud config set project "${PROJECT_ID}"
 
@@ -402,11 +403,14 @@ gcloud run deploy "${SERVICE}" \
   --image "${IMAGE}" \
   --region "${REGION}" \
   --platform managed \
+  --max "${MAX_INSTANCES}" \
   --allow-unauthenticated
 ```
 
 `--allow-unauthenticated` を付けるのは、この API をブラウザや `curl` からそのまま確認しやすくするためです。
 将来的に公開範囲を制限したい場合は、この設定は見直してください。
+
+`--max 3` はサービス全体の最大インスタンス数を3に制限し、公開後の急激なアクセスや意図しない大量リクエストによる費用増加を抑えるための安全上限です。上限到達時は応答遅延やリクエスト拒否が起こり得るため、実際の利用状況を確認してから段階的に引き上げます。急激なトラフィック変動などにより、一時的に上限を超える場合がある点にも注意してください。
 
 Cloud Run では `PORT` 環境変数が自動で注入され、このコンテナはその値で `0.0.0.0` に bind する前提です。
 
@@ -420,8 +424,9 @@ Cloud Run では `PORT` 環境変数が自動で注入され、このコンテ�
 1. `prove -lr t` を実行
 2. `zengin-pl.ref` から固定済みbackend revisionを読み込む
 3. Docker image を build
-4. Artifact Registry へ push
-5. Cloud Run へ deploy
+4. 起動したコンテナをOpenAPI契約と照合
+5. Artifact Registry へ push
+6. 最大インスタンス数3を指定して Cloud Run へ deploy
 
 ### GitHub 側で必要な設定
 
@@ -436,6 +441,7 @@ WIF を使う前提では、GitHub repository の `Variables` に次を設定し
 - region: `asia-northeast1`
 - Artifact Registry repository: `zengin-pl-api`
 - Cloud Run service: `zengin-pl-api`
+- Cloud Run service-level max instances: `3`
 
 認証は `google-github-actions/auth@v3` と `google-github-actions/deploy-cloudrun@v3` を使います。
 
@@ -554,6 +560,8 @@ verification token ではなく、`X-Slack-Signature` / `X-Slack-Request-Timesta
 
 - Cloud Run は未使用時にスケールゼロできる
 - `min instances` は 0 のままにする
+- service-level の `max instances` は workflow と手動 deploy の両方で 3 に固定する
+- 上限到達による遅延や拒否が継続する場合だけ、利用状況と費用を確認して段階的に引き上げる
 - Artifact Registry の image 保存にも課金が発生しうる
 - 不要になった Cloud Run service と Artifact Registry の image は削除する
 - 検証用の tag を増やしすぎない
