@@ -1,0 +1,450 @@
+openapi: 3.1.0
+info:
+  title: zengin-pl-api
+  version: 0.1.0
+  description: |
+    `zengin-pl` を利用して、全銀コードの銀行・支店情報を検索するHTTP APIです。
+
+    `/api` 配下は一般クライアント向けのJSON APIです。
+    `/slack/zengin` はSlack Slash Command専用の受信口です。
+  contact:
+    url: https://github.com/sironekotoro/zengin-pl-api
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: /
+    description: 現在のホスト
+security: []
+tags:
+  - name: Metadata
+    description: APIとデータソースのメタ情報
+  - name: Banks
+    description: 銀行の取得と検索
+  - name: Branches
+    description: 支店の取得と検索
+  - name: Slack
+    description: Slack Slash Command連携
+paths:
+  /api/meta:
+    get:
+      operationId: getMeta
+      summary: メタ情報を取得する
+      tags: [Metadata]
+      responses:
+        '200':
+          description: API、backend、データソースのメタ情報
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetaResponse'
+              example:
+                api:
+                  name: zengin-pl-api
+                  version: 0.1.0
+                  git_sha: abc1234
+                  build_time: '2026-03-24T00:40:00Z'
+                backend:
+                  class: Zengin::Pl
+                  version: '0.01'
+                  base_url: https://raw.githubusercontent.com/sironekotoro/zengin-data-mirror/main/data
+                data:
+                  source:
+                    kind: zengin-data-mirror
+                    revision: abc1234
+                    updated_at: '2026-03-24T00:00:00Z'
+  /api/banks:
+    get:
+      operationId: searchBanks
+      summary: 銀行名などで銀行を検索する
+      tags: [Banks]
+      parameters:
+        - $ref: '#/components/parameters/SearchName'
+      responses:
+        '200':
+          description: 検索結果。該当しない場合は空配列
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BankSearchResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '500':
+          $ref: '#/components/responses/BackendError'
+  /api/banks/{bankCode}:
+    parameters:
+      - $ref: '#/components/parameters/BankCode'
+    get:
+      operationId: getBank
+      summary: 銀行コードで銀行を取得する
+      tags: [Banks]
+      responses:
+        '200':
+          description: 銀行情報
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BankResponse'
+        '404':
+          $ref: '#/components/responses/BankNotFound'
+        '500':
+          $ref: '#/components/responses/BackendError'
+  /api/banks/{bankCode}/branches:
+    parameters:
+      - $ref: '#/components/parameters/BankCode'
+    get:
+      operationId: searchBranches
+      summary: 指定した銀行の支店を検索する
+      tags: [Branches]
+      parameters:
+        - $ref: '#/components/parameters/SearchName'
+      responses:
+        '200':
+          description: 銀行情報と支店検索結果。該当しない場合は空配列
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchSearchResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '404':
+          $ref: '#/components/responses/BankNotFound'
+        '500':
+          $ref: '#/components/responses/BackendError'
+  /api/banks/{bankCode}/branches/{branchCode}:
+    parameters:
+      - $ref: '#/components/parameters/BankCode'
+      - $ref: '#/components/parameters/BranchCode'
+    get:
+      operationId: getBranch
+      summary: 銀行コードと支店コードで支店を取得する
+      tags: [Branches]
+      responses:
+        '200':
+          description: 銀行と支店の情報
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchResponse'
+        '404':
+          description: 銀行または支店が見つからない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                bankNotFound:
+                  value:
+                    error:
+                      code: bank_not_found
+                      message: 'Bank not found: 9999'
+                branchNotFound:
+                  value:
+                    error:
+                      code: branch_not_found
+                      message: 'Branch not found: 0001/999'
+        '500':
+          $ref: '#/components/responses/BackendError'
+  /slack/zengin:
+    post:
+      operationId: handleSlackZengin
+      summary: Slack Slash Commandを処理する
+      description: |
+        Slackから送信される署名付きリクエスト専用です。
+        一般のAPIクライアントは `/api` 配下を利用してください。
+      tags: [Slack]
+      security:
+        - SlackRequestTimestamp: []
+          SlackSignature: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SlackCommandRequest'
+      responses:
+        '200':
+          description: Slackへ表示するephemeralメッセージ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlackCommandResponse'
+        '401':
+          description: Slack署名またはtimestampが不正
+          content:
+            text/plain:
+              schema:
+                type: string
+        '500':
+          description: Slack Signing Secretが未設定
+          content:
+            text/plain:
+              schema:
+                type: string
+components:
+  securitySchemes:
+    SlackRequestTimestamp:
+      type: apiKey
+      in: header
+      name: X-Slack-Request-Timestamp
+      description: Slackが付与するUNIX timestamp。5分以内の値だけを受理します。
+    SlackSignature:
+      type: apiKey
+      in: header
+      name: X-Slack-Signature
+      description: Slack Signing Secretを使用して計算されたv0署名。
+  parameters:
+    BankCode:
+      name: bankCode
+      in: path
+      required: true
+      description: 4桁の金融機関コード
+      schema:
+        type: string
+        pattern: '^\d{4}$'
+      example: '0001'
+    BranchCode:
+      name: branchCode
+      in: path
+      required: true
+      description: 3桁の支店コード
+      schema:
+        type: string
+        pattern: '^\d{3}$'
+      example: '001'
+    SearchName:
+      name: name
+      in: query
+      required: true
+      description: 名称、かな、コードの全部または一部
+      schema:
+        type: string
+        minLength: 1
+      example: みずほ
+  responses:
+    InvalidRequest:
+      description: 必須の検索語が指定されていない
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: invalid_request
+              message: Query parameter "name" is required
+    BankNotFound:
+      description: 銀行が見つからない
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: bank_not_found
+              message: 'Bank not found: 9999'
+    BackendError:
+      description: データ取得backendでエラーが発生した
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: backend_error
+              message: backend request failed
+  schemas:
+    Bank:
+      type: object
+      required: [code, name]
+      properties:
+        code:
+          type: string
+          pattern: '^\d{4}$'
+          example: '0001'
+        name:
+          type: string
+          example: みずほ
+        hira:
+          type: string
+          example: みずほ
+        kana:
+          type: string
+          example: ミズホ
+        roma:
+          type: string
+          example: mizuho
+      additionalProperties: true
+    BankSummary:
+      type: object
+      required: [code, name]
+      properties:
+        code:
+          type: string
+          pattern: '^\d{4}$'
+        name:
+          type: string
+      additionalProperties: false
+    Branch:
+      type: object
+      required: [code, name]
+      properties:
+        code:
+          type: string
+          pattern: '^\d{3}$'
+          example: '001'
+        name:
+          type: string
+          example: 東京営業部
+        hira:
+          type: string
+          example: とうきよう
+        kana:
+          type: string
+          example: トウキヨウ
+        roma:
+          type: string
+          example: toukiyou
+      additionalProperties: true
+    BranchSummary:
+      type: object
+      required: [code, name]
+      properties:
+        code:
+          type: string
+          pattern: '^\d{3}$'
+        name:
+          type: string
+      additionalProperties: false
+    BankResponse:
+      type: object
+      required: [bank]
+      properties:
+        bank:
+          $ref: '#/components/schemas/Bank'
+      additionalProperties: false
+    BankSearchResponse:
+      type: object
+      required: [banks]
+      properties:
+        banks:
+          type: array
+          items:
+            $ref: '#/components/schemas/Bank'
+      additionalProperties: false
+    BranchResponse:
+      type: object
+      required: [bank, branch]
+      properties:
+        bank:
+          $ref: '#/components/schemas/BankSummary'
+        branch:
+          $ref: '#/components/schemas/Branch'
+      additionalProperties: false
+    BranchSearchResponse:
+      type: object
+      required: [bank, branches]
+      properties:
+        bank:
+          $ref: '#/components/schemas/BankSummary'
+        branches:
+          type: array
+          items:
+            $ref: '#/components/schemas/BranchSummary'
+      additionalProperties: false
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+      additionalProperties: false
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/Error'
+      additionalProperties: false
+    ApiMetadata:
+      type: object
+      required: [name, version, git_sha, build_time]
+      properties:
+        name:
+          type: string
+        version:
+          type: [string, 'null']
+        git_sha:
+          type: [string, 'null']
+        build_time:
+          type: [string, 'null']
+          format: date-time
+      additionalProperties: false
+    BackendMetadata:
+      type: object
+      required: [class, version, base_url]
+      properties:
+        class:
+          type: [string, 'null']
+        version:
+          type: [string, 'null']
+        base_url:
+          type: [string, 'null']
+          format: uri
+      additionalProperties: false
+    DataSourceMetadata:
+      type: object
+      required: [kind, revision, updated_at]
+      properties:
+        kind:
+          type: [string, 'null']
+        revision:
+          type: [string, 'null']
+        updated_at:
+          type: [string, 'null']
+          format: date-time
+      additionalProperties: false
+    DataMetadata:
+      type: object
+      required: [source]
+      properties:
+        source:
+          $ref: '#/components/schemas/DataSourceMetadata'
+      additionalProperties: false
+    MetaResponse:
+      type: object
+      required: [api, backend, data]
+      properties:
+        api:
+          $ref: '#/components/schemas/ApiMetadata'
+        backend:
+          $ref: '#/components/schemas/BackendMetadata'
+        data:
+          $ref: '#/components/schemas/DataMetadata'
+      additionalProperties: false
+    SlackCommandRequest:
+      type: object
+      properties:
+        command:
+          type: string
+          const: /zengin
+        text:
+          type: string
+        team_id:
+          type: string
+        channel_id:
+          type: string
+        user_id:
+          type: string
+      additionalProperties: true
+    SlackCommandResponse:
+      type: object
+      required: [response_type, text]
+      properties:
+        response_type:
+          type: string
+          const: ephemeral
+        text:
+          type: string
+      additionalProperties: false
