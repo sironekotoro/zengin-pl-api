@@ -267,7 +267,7 @@ plackup -Ilib app.psgi
 
 アプリケーションは `PORT` 環境変数で待受ポートを受け取り、コンテナ内では `0.0.0.0` で listen する前提です。
 
-Docker で確認する場合は、デフォルトでは `zengin-pl` を Git URL から取得するため、sibling checkout は不要です。
+Docker で確認する場合は、デフォルトでは `zengin-pl.ref` に記録されたcommitをGit URLから取得するため、sibling checkoutは不要です。同じcommitを通常のDocker buildとCloud Run deployで利用するので、API側の変更だけでbackendが意図せず更新されることはありません。
 
 ```bash
 docker build -t zengin-pl-api:dev .
@@ -283,7 +283,7 @@ docker build \
   -t zengin-pl-api:dev .
 ```
 
-`ZENGIN_PL_GIT_REF` は省略可能です。省略した場合は、リモートリポジトリのデフォルトブランチを使います。
+`ZENGIN_PL_GIT_REF` は開発時の一時的な上書き用です。省略した場合は `zengin-pl.ref` の40文字commit SHAを使います。正式にbackendを更新するときは、`zengin-pl.ref` を新しい検証済みSHAへ変更し、通常のpull requestとしてテストします。
 
 Docker build 中の `zengin-pl` は、GitHub clone 後に `cpanm --installdeps` と `cpanm` で標準的に install しています。
 
@@ -416,9 +416,10 @@ Cloud Run では `PORT` 環境変数が自動で注入され、このコンテ�
 流れ:
 
 1. `prove -lr t` を実行
-2. Docker image を build
-3. Artifact Registry へ push
-4. Cloud Run へ deploy
+2. `zengin-pl.ref` から固定済みbackend revisionを読み込む
+3. Docker image を build
+4. Artifact Registry へ push
+5. Cloud Run へ deploy
 
 ### GitHub 側で必要な設定
 
