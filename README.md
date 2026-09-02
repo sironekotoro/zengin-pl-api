@@ -66,12 +66,14 @@
 - TypeScriptなどのクライアント型・コード生成
 - API実装と仕様の契約テスト
 
-OpenAPI文書の構文は専用リンターで、API本体の動作はPerlテストで検証します。
+OpenAPI文書の構文は専用リンターで検証します。さらにpull requestと本番deployのCIではDockerコンテナを起動し、Schemathesisで実際のHTTPステータス、Content-Type、JSONレスポンスを `openapi.yaml` と照合します。Slackの署名付き入口は契約テストから除外し、Perlテストで検証します。
 
 ```bash
 prove -lr t
 npx --yes @redocly/cli@2.50.0 lint openapi.yaml --extends=spec
 ```
+
+契約テストにはSchemathesis 4.25.2を固定して使用します。明示的なexampleとschema coverageからリクエストを生成するため、APIまたはOpenAPIだけを変更して両者がずれた場合はCIが失敗します。
 
 `openapi.yaml` の `info.version` はAPI契約文書の版です。Cloud Runへデプロイされたアプリケーションの版は、従来どおり `GET /api/meta` の `api.version` で確認します。
 

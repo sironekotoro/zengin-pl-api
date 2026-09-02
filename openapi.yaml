@@ -52,7 +52,7 @@ paths:
                   source:
                     kind: zengin-data-mirror
                     revision: abc1234
-                    updated_at: '2026-03-24T00:00:00Z'
+                    updated_at: '20260824'
   /api/banks:
     get:
       operationId: searchBanks
@@ -403,7 +403,8 @@ components:
           type: [string, 'null']
         updated_at:
           type: [string, 'null']
-          format: date-time
+          description: データの基準日（YYYYMMDD）
+          pattern: '^\d{8}$'
       additionalProperties: false
     DataMetadata:
       type: object
