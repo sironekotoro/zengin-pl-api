@@ -23,6 +23,10 @@ jobs:
         run: |
           prove -lr t
 
+      - name: Validate OpenAPI document
+        run: |
+          npx --yes @redocly/cli@2.50.0 lint openapi.yaml --extends=spec
+
   docker:
     runs-on: ubuntu-latest
 
