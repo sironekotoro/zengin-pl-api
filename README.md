@@ -12,6 +12,7 @@
 - Web API
 - ターミナルからの `curl` 利用
 - Slack Slash コマンド連携
+- OpenAPI による機械可読な API 契約
 
 `zengin-pl` 自体はデータ取得・検索ロジックを担い、`zengin-pl-api` はその上に載る **薄いアダプタ層** として設計します。
 
@@ -52,6 +53,27 @@
 
 ### Slack
 - Slack に見やすい整形済みテキストを返す
+
+## OpenAPI
+
+現在のHTTP API契約は、リポジトリ直下の [`openapi.yaml`](./openapi.yaml) にOpenAPI 3.1形式で定義しています。
+既存の `/api` 配下のURLとレスポンスを正本として記述しており、OpenAPI対応のために実行時のURLは変更していません。
+
+仕様書は次の用途に利用できます。
+
+- APIリファレンスの生成
+- `curl` や各種クライアントからの利用方法確認
+- TypeScriptなどのクライアント型・コード生成
+- API実装と仕様の契約テスト
+
+OpenAPI文書の構文は専用リンターで、API本体の動作はPerlテストで検証します。
+
+```bash
+prove -lr t
+npx --yes @redocly/cli@2.50.0 lint openapi.yaml --extends=spec
+```
+
+`openapi.yaml` の `info.version` はAPI契約文書の版です。Cloud Runへデプロイされたアプリケーションの版は、従来どおり `GET /api/meta` の `api.version` で確認します。
 
 ## レスポンス例
 
