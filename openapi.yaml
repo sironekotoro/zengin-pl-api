@@ -243,7 +243,7 @@ components:
               code: bank_not_found
               message: 'Bank not found: 9999'
     BackendError:
-      description: データ取得backendでエラーが発生した
+      description: データ取得backendでエラーが発生した。内部の例外詳細はレスポンスに含めない
       content:
         application/json:
           schema:
