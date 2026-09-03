@@ -46,6 +46,19 @@
 - `GET /api/banks/:bank_code/branches?name=...`
 - `POST /slack/zengin`
 
+## 公開URL
+
+一般のAPIクライアント、ブラウザ拡張機能、Slack Appには、次の固定URLを使用します。
+
+```text
+https://api.zengin.sironekotoro.com
+```
+
+- Web API: `https://api.zengin.sironekotoro.com/api/...`
+- Slack Slash Command: `https://api.zengin.sironekotoro.com/slack/zengin`
+
+Cloud Runが発行する `*.run.app` URLは既存利用者との互換性および運用確認のため維持しますが、新しいクライアントへ埋め込みません。`openapi.yaml` ではこの固定URLを既定serverとして定義しています。
+
 ## レスポンス方針
 
 ### Web API
@@ -530,7 +543,7 @@ Cloud Run 上の公開 URL を使って、Slack App に `/zengin` を設定で�
 
 1. Slack App を作成する
 2. `Slash Commands` で `/zengin` を追加する
-3. Request URL に `https://<cloud-run-url>/slack/zengin` を設定する
+3. Request URL に `https://api.zengin.sironekotoro.com/slack/zengin` を設定する
 4. `Basic Information` の `Signing Secret` を控える
 5. App を workspace に install する
 
@@ -562,7 +575,7 @@ verification token ではなく、`X-Slack-Signature` / `X-Slack-Request-Timesta
 
 `/zengin help` では使い方に加えて、`/api/meta` 相当のメタ情報の一部を Slack 向けに整形して返します。
 
-この公開 URL は、将来 Slack endpoint を追加したときの Request URL 候補にもなります。
+この固定URLは、将来Slack endpointを追加したときのRequest URL候補にもなります。
 
 `/api/meta` では、`api.*` は `zengin-pl-api` 自身の情報を返し、`backend.*` と `data.source` は backend の `meta()` を取り込んで返します。
 `data.source` は、今後 `revision` や `updated_at` などを拡張しやすいようにオブジェクトで返しています。
