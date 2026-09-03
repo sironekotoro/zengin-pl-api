@@ -17,6 +17,8 @@ servers:
     description: 現在のホスト
 security: []
 tags:
+  - name: CORS
+    description: ブラウザからのcross-originアクセスに必要な事前確認
   - name: Metadata
     description: APIとデータソースのメタ情報
   - name: Banks
@@ -27,6 +29,13 @@ tags:
     description: Slack Slash Command連携
 paths:
   /api/meta:
+    options:
+      operationId: preflightMeta
+      summary: ブラウザ向けCORS事前確認
+      tags: [CORS]
+      responses:
+        '204':
+          $ref: '#/components/responses/CorsPreflight'
     get:
       operationId: getMeta
       summary: メタ情報を取得する
@@ -54,6 +63,13 @@ paths:
                     revision: abc1234
                     updated_at: '20260824'
   /api/banks:
+    options:
+      operationId: preflightBanks
+      summary: ブラウザ向けCORS事前確認
+      tags: [CORS]
+      responses:
+        '204':
+          $ref: '#/components/responses/CorsPreflight'
     get:
       operationId: searchBanks
       summary: 銀行名などで銀行を検索する
@@ -74,6 +90,13 @@ paths:
   /api/banks/{bankCode}:
     parameters:
       - $ref: '#/components/parameters/BankCode'
+    options:
+      operationId: preflightBank
+      summary: ブラウザ向けCORS事前確認
+      tags: [CORS]
+      responses:
+        '204':
+          $ref: '#/components/responses/CorsPreflight'
     get:
       operationId: getBank
       summary: 銀行コードで銀行を取得する
@@ -92,6 +115,13 @@ paths:
   /api/banks/{bankCode}/branches:
     parameters:
       - $ref: '#/components/parameters/BankCode'
+    options:
+      operationId: preflightBranches
+      summary: ブラウザ向けCORS事前確認
+      tags: [CORS]
+      responses:
+        '204':
+          $ref: '#/components/responses/CorsPreflight'
     get:
       operationId: searchBranches
       summary: 指定した銀行の支店を検索する
@@ -115,6 +145,13 @@ paths:
     parameters:
       - $ref: '#/components/parameters/BankCode'
       - $ref: '#/components/parameters/BranchCode'
+    options:
+      operationId: preflightBranch
+      summary: ブラウザ向けCORS事前確認
+      tags: [CORS]
+      responses:
+        '204':
+          $ref: '#/components/responses/CorsPreflight'
     get:
       operationId: getBranch
       summary: 銀行コードと支店コードで支店を取得する
@@ -222,6 +259,31 @@ components:
         minLength: 1
       example: みずほ
   responses:
+    CorsPreflight:
+      description: |
+        `/api` 配下の公開read APIに対するCORS事前確認です。
+        資格情報は許可せず、`GET` と `OPTIONS` だけを許可します。
+      headers:
+        Access-Control-Allow-Origin:
+          description: すべてのWeb originからの読み取りを許可
+          schema:
+            type: string
+            const: '*'
+        Access-Control-Allow-Methods:
+          description: 許可するHTTPメソッド
+          schema:
+            type: string
+            const: 'GET, OPTIONS'
+        Access-Control-Allow-Headers:
+          description: 許可する非単純request header
+          schema:
+            type: string
+            const: Content-Type
+        Access-Control-Max-Age:
+          description: ブラウザがpreflight結果をキャッシュできる秒数
+          schema:
+            type: string
+            const: '86400'
     InvalidRequest:
       description: 必須の検索語が指定されていない
       content:

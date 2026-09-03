@@ -77,6 +77,17 @@ npx --yes @redocly/cli@2.50.0 lint openapi.yaml --extends=spec
 
 `openapi.yaml` の `info.version` はAPI契約文書の版です。Cloud Runへデプロイされたアプリケーションの版は、従来どおり `GET /api/meta` の `api.version` で確認します。
 
+### ブラウザからの利用（CORS）
+
+`/api` 配下は通常のWebページから直接呼び出せます。全ての応答（成功・JSONエラーを含む）に `Access-Control-Allow-Origin: *` を返し、`OPTIONS` の事前確認には `204 No Content` で応答します。
+
+- 許可するmethod: `GET`, `OPTIONS`
+- 許可する非単純request header: `Content-Type`
+- credentials（CookieやHTTP認証情報）は許可しない
+- preflight結果のキャッシュ時間: 24時間
+
+`/slack/zengin` はSlack署名付きリクエスト専用のため、CORS対象外です。
+
 ## レスポンス例
 
 ### メタ情報確認
