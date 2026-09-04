@@ -15,6 +15,7 @@ env:
   REGION: asia-northeast1
   REPOSITORY: zengin-pl-api
   SERVICE: zengin-pl-api
+  MAX_INSTANCES: '3'
   IMAGE: asia-northeast1-docker.pkg.dev/zengin-pl-api/zengin-pl-api/zengin-pl-api:${{ github.sha }}
 
 jobs:
@@ -56,15 +57,11 @@ jobs:
 
       - name: Resolve zengin-pl revision
         run: |
-          ZENGIN_PL_GIT_REF="$(
-            git ls-remote \
-              https://github.com/sironekotoro/zengin-pl.git \
-              refs/heads/master |
-            awk '{print $1}'
-          )"
+          ZENGIN_PL_GIT_REF="$(cat zengin-pl.ref)"
 
-          if ! printf '%s' "$ZENGIN_PL_GIT_REF" | grep -Eq '^[0-9a-f]{40}$'; then
-            echo "Failed to resolve a valid zengin-pl revision" >&2
+          if [ "$(wc -l < zengin-pl.ref)" -ne 1 ] || \
+            ! printf '%s' "$ZENGIN_PL_GIT_REF" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "zengin-pl.ref must contain exactly one 40-character commit SHA" >&2
             exit 1
           fi
 
@@ -78,6 +75,40 @@ jobs:
             -t "${IMAGE}" \
             .
 
+      - name: Start API container
+        run: |
+          docker run -d --rm --name zengin-pl-api-contract-test -p 5000:8080 -e PORT=8080 "${IMAGE}"
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5000/api/meta >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs zengin-pl-api-contract-test
+          exit 1
+
+      - name: Smoke test API
+        run: |
+          curl -fsS http://127.0.0.1:5000/api/banks/0001 | grep '"code":"0001"'
+          curl -fsS http://127.0.0.1:5000/api/banks/0001/branches/001 | grep '"branch"'
+          curl -fsS -G --data-urlencode 'name=東京' http://127.0.0.1:5000/api/banks/0001/branches | grep '"branches"'
+
+      - name: Validate running API against OpenAPI
+        uses: schemathesis/action@v3.0.0
+        with:
+          schema: openapi.yaml
+          base-url: http://127.0.0.1:5000
+          version: '4.25.2'
+          checks: not_a_server_error,status_code_conformance,content_type_conformance,response_schema_conformance
+          max-examples: '10'
+          coverage: 'false'
+          args: --phases examples,coverage --exclude-tag Slack --seed 1 --no-color
+
+      - name: Stop API container
+        if: always()
+        run: |
+          docker rm -f zengin-pl-api-contract-test || true
+
       - name: Push image
         run: |
           docker push "${IMAGE}"
@@ -88,6 +119,7 @@ jobs:
           service: ${{ env.SERVICE }}
           region: ${{ env.REGION }}
           image: ${{ env.IMAGE }}
+          flags: '--max=${{ env.MAX_INSTANCES }}'
           env_vars: |
             APP_NAME=zengin-pl-api
             APP_VERSION=${{ github.ref_name }}

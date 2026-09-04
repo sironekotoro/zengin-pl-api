@@ -26,6 +26,55 @@ subtest 'GET /api/banks/0001 returns bank json' => sub {
     ok(defined $res->{json}->{bank}->{name}, 'bank.name exists');
 };
 
+subtest 'public API responses allow browser cross-origin access' => sub {
+    my $success = request(
+        $app,
+        'GET',
+        '/api/meta',
+        undef,
+        headers => { HTTP_ORIGIN => 'https://example.invalid' },
+    );
+
+    is($success->{status}, 200, 'success response keeps its status');
+    is(header($success, 'Access-Control-Allow-Origin'), '*', 'success response allows any origin');
+    is(header($success, 'Access-Control-Allow-Methods'), 'GET, OPTIONS', 'success response publishes allowed methods');
+    is(header($success, 'Access-Control-Allow-Headers'), 'Content-Type', 'success response publishes allowed request headers');
+    is(header($success, 'Access-Control-Max-Age'), '86400', 'success response publishes preflight cache lifetime');
+
+    my $error = request($app, 'POST', '/api/meta');
+    is($error->{status}, 405, 'existing method error status is unchanged');
+    is($error->{json}->{error}->{code}, 'method_not_allowed', 'existing method error code is unchanged');
+    is(header($error, 'Access-Control-Allow-Origin'), '*', 'error response also allows browser clients to read it');
+};
+
+subtest 'OPTIONS /api endpoints return a CORS preflight response' => sub {
+    my $res = request(
+        $app,
+        'OPTIONS',
+        '/api/banks/0001/branches',
+        undef,
+        headers => {
+            HTTP_ORIGIN                         => 'https://example.invalid',
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD  => 'GET',
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS => 'content-type',
+        },
+    );
+
+    is($res->{status}, 204, 'preflight returns 204');
+    is($res->{body}, q{}, 'preflight has no response body');
+    is(header($res, 'Access-Control-Allow-Origin'), '*', 'preflight allows any origin');
+    is(header($res, 'Access-Control-Allow-Methods'), 'GET, OPTIONS', 'preflight allows read methods only');
+    is(header($res, 'Access-Control-Allow-Headers'), 'Content-Type', 'preflight allows the documented request header');
+    is(header($res, 'Access-Control-Max-Age'), '86400', 'preflight can be cached for one day');
+};
+
+subtest 'Slack endpoint remains outside the public CORS policy' => sub {
+    my $res = request($app, 'OPTIONS', '/slack/zengin');
+
+    is($res->{status}, 405, 'Slack endpoint keeps its method restriction');
+    ok(!defined header($res, 'Access-Control-Allow-Origin'), 'Slack endpoint does not allow cross-origin access');
+};
+
 subtest 'GET /api/banks?name=みずほ returns banks array' => sub {
     my $res = request(
         $app,
@@ -177,15 +226,22 @@ subtest 'branch search keeps existing error responses' => sub {
 
     my $error_backend = CountingBackend->new(fail_get_branches => 1);
     my $error_app = Zengin::PL::API->new(backend => $error_backend)->to_app;
-    my $backend_error = request(
-        $error_app,
-        'GET',
-        '/api/banks/0001/branches',
-        'name=' . uri_escape_utf8('東京'),
-    );
+    my ($backend_error, $backend_warning);
+    {
+        local $SIG{__WARN__} = sub { $backend_warning .= join q{}, @_ };
+        $backend_error = request(
+            $error_app,
+            'GET',
+            '/api/banks/0001/branches',
+            'name=' . uri_escape_utf8('東京'),
+        );
+    }
 
     is($backend_error->{status}, 500, 'backend error returns 500');
     is($backend_error->{json}->{error}->{code}, 'backend_error', 'backend error code is unchanged');
+    is($backend_error->{json}->{error}->{message}, 'Backend request failed', 'backend details are hidden from clients');
+    unlike($backend_error->{body}, qr/branch backend failed/, 'backend details are absent from the response body');
+    like($backend_warning, qr/branch backend failed/, 'backend details are retained in server logs');
     is($error_backend->{calls}->{get_bank}, 1, 'backend error request checks the bank once');
     is($error_backend->{calls}->{get_branches}, 1, 'backend error request fetches branches once');
     is($error_backend->{calls}->{search} || 0, 0, 'backend error request does not call search');
@@ -208,7 +264,7 @@ subtest 'GET /api/banks/0001/branches/999 returns branch json error' => sub {
 done_testing;
 
 sub request {
-    my ($app, $method, $path, $query_string) = @_;
+    my ($app, $method, $path, $query_string, %args) = @_;
 
     my $input = q{};
     open my $input_fh, '<', \$input or die "Failed to open in-memory input: $!";
@@ -230,16 +286,28 @@ sub request {
         'psgi.run_once'     => 0,
         'psgi.streaming'    => 0,
         'psgi.nonblocking'  => 0,
+        %{ $args{headers} || {} },
     });
 
     my $body = join q{}, @{$res->[2]};
+    my %headers = @{$res->[1]};
+    my $decoded_json;
+    if (($headers{'Content-Type'} || q{}) =~ m{\Aapplication/json\b}) {
+        $decoded_json = decode_json($body);
+    }
 
     return {
         status => $res->[0],
         headers => $res->[1],
         body => $body,
-        json => decode_json($body),
+        json => $decoded_json,
     };
+}
+
+sub header {
+    my ($res, $name) = @_;
+    my %headers = @{$res->{headers}};
+    return $headers{$name};
 }
 
 {

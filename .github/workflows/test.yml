@@ -23,6 +23,15 @@ jobs:
         run: |
           prove -lr t
 
+      - name: Validate zengin-pl revision pin
+        run: |
+          test "$(wc -l < zengin-pl.ref)" -eq 1
+          grep -Eq '^[0-9a-f]{40}$' zengin-pl.ref
+
+      - name: Validate OpenAPI document
+        run: |
+          npx --yes @redocly/cli@2.50.0 lint openapi.yaml --extends=spec
+
   docker:
     runs-on: ubuntu-latest
 
@@ -33,11 +42,36 @@ jobs:
         run: |
           docker build -t zengin-pl-api:test .
 
-      - name: Smoke test API
+      - name: Start API container
         run: |
           docker run -d --rm --name zengin-pl-api-test -p 5000:8080 -e PORT=8080 zengin-pl-api:test
-          trap 'docker rm -f zengin-pl-api-test' EXIT
-          sleep 3
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5000/api/meta >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs zengin-pl-api-test
+          exit 1
+
+      - name: Smoke test API
+        run: |
           curl -fsS http://127.0.0.1:5000/api/banks/0001 | grep '"code":"0001"'
           curl -fsS http://127.0.0.1:5000/api/banks/0001/branches/001 | grep '"branch"'
           curl -fsS -G --data-urlencode 'name=東京' http://127.0.0.1:5000/api/banks/0001/branches | grep '"branches"'
+
+      - name: Validate running API against OpenAPI
+        uses: schemathesis/action@v3.0.0
+        with:
+          schema: openapi.yaml
+          base-url: http://127.0.0.1:5000
+          version: '4.25.2'
+          checks: not_a_server_error,status_code_conformance,content_type_conformance,response_schema_conformance
+          max-examples: '10'
+          coverage: 'false'
+          args: --phases examples,coverage --exclude-tag Slack --seed 1 --no-color
+
+      - name: Stop API container
+        if: always()
+        run: |
+          docker rm -f zengin-pl-api-test || true

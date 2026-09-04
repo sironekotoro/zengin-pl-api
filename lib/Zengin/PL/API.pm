@@ -25,7 +25,8 @@ sub to_app {
 
     return sub {
         my ($env) = @_;
-        return $self->handle_request($env);
+        my $response = $self->handle_request($env);
+        return $self->_apply_cors_headers($env, $response);
     };
 }
 
@@ -34,6 +35,10 @@ sub handle_request {
 
     my $method = $env->{REQUEST_METHOD} || 'GET';
     my $path   = $env->{PATH_INFO}      || '/';
+
+    if ($self->_is_public_api_path($path) && $method eq 'OPTIONS') {
+        return $self->_cors_preflight_response;
+    }
 
     if ($path =~ m{\A/slack/zengin/?\z}) {
         return $self->_handle_slack_zengin($env) if $method eq 'POST';
@@ -697,14 +702,58 @@ sub _env_or_undef {
 sub _backend_error_response {
     my ($self, $error) = @_;
 
+    $error = 'Unknown backend error' if !defined $error || $error eq q{};
     chomp $error;
+    warn "Backend request failed: $error\n";
 
     return $self->_json_response(500, {
         error => {
             code    => 'backend_error',
-            message => $error,
+            message => 'Backend request failed',
         },
     });
+}
+
+sub _is_public_api_path {
+    my ($self, $path) = @_;
+    return $path =~ m{\A/api(?:/|\z)};
+}
+
+sub _cors_headers {
+    return (
+        'Access-Control-Allow-Origin'   => '*',
+        'Access-Control-Allow-Methods'  => 'GET, OPTIONS',
+        'Access-Control-Allow-Headers'  => 'Content-Type',
+        'Access-Control-Max-Age'        => '86400',
+    );
+}
+
+sub _cors_preflight_response {
+    my ($self) = @_;
+
+    return [
+        204,
+        [
+            'Content-Length' => 0,
+        ],
+        [],
+    ];
+}
+
+sub _apply_cors_headers {
+    my ($self, $env, $response) = @_;
+    my $path = $env->{PATH_INFO} || '/';
+
+    return $response if !$self->_is_public_api_path($path);
+
+    return [
+        $response->[0],
+        [
+            @{$response->[1]},
+            $self->_cors_headers,
+        ],
+        $response->[2],
+    ];
 }
 
 sub _json_response {

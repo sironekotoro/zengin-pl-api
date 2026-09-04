@@ -12,6 +12,7 @@
 - Web API
 - ターミナルからの `curl` 利用
 - Slack Slash コマンド連携
+- OpenAPI による機械可読な API 契約
 
 `zengin-pl` 自体はデータ取得・検索ロジックを担い、`zengin-pl-api` はその上に載る **薄いアダプタ層** として設計します。
 
@@ -45,6 +46,19 @@
 - `GET /api/banks/:bank_code/branches?name=...`
 - `POST /slack/zengin`
 
+## 公開URL
+
+一般のAPIクライアント、ブラウザ拡張機能、Slack Appには、次の固定URLを使用します。
+
+```text
+https://api.zengin.sironekotoro.com
+```
+
+- Web API: `https://api.zengin.sironekotoro.com/api/...`
+- Slack Slash Command: `https://api.zengin.sironekotoro.com/slack/zengin`
+
+Cloud Runが発行する `*.run.app` URLは既存利用者との互換性および運用確認のため維持しますが、新しいクライアントへ埋め込みません。`openapi.yaml` ではこの固定URLを既定serverとして定義しています。
+
 ## レスポンス方針
 
 ### Web API
@@ -52,6 +66,40 @@
 
 ### Slack
 - Slack に見やすい整形済みテキストを返す
+
+## OpenAPI
+
+現在のHTTP API契約は、リポジトリ直下の [`openapi.yaml`](./openapi.yaml) にOpenAPI 3.1形式で定義しています。
+既存の `/api` 配下のURLとレスポンスを正本として記述しており、OpenAPI対応のために実行時のURLは変更していません。
+
+仕様書は次の用途に利用できます。
+
+- APIリファレンスの生成
+- `curl` や各種クライアントからの利用方法確認
+- TypeScriptなどのクライアント型・コード生成
+- API実装と仕様の契約テスト
+
+OpenAPI文書の構文は専用リンターで検証します。さらにpull requestと本番deployのCIではDockerコンテナを起動し、Schemathesisで実際のHTTPステータス、Content-Type、JSONレスポンスを `openapi.yaml` と照合します。Slackの署名付き入口は契約テストから除外し、Perlテストで検証します。
+
+```bash
+prove -lr t
+npx --yes @redocly/cli@2.50.0 lint openapi.yaml --extends=spec
+```
+
+契約テストにはSchemathesis 4.25.2を固定して使用します。明示的なexampleとschema coverageからリクエストを生成するため、APIまたはOpenAPIだけを変更して両者がずれた場合はCIが失敗します。
+
+`openapi.yaml` の `info.version` はAPI契約文書の版です。Cloud Runへデプロイされたアプリケーションの版は、従来どおり `GET /api/meta` の `api.version` で確認します。
+
+### ブラウザからの利用（CORS）
+
+`/api` 配下は通常のWebページから直接呼び出せます。全ての応答（成功・JSONエラーを含む）に `Access-Control-Allow-Origin: *` を返し、`OPTIONS` の事前確認には `204 No Content` で応答します。
+
+- 許可するmethod: `GET`, `OPTIONS`
+- 許可する非単純request header: `Content-Type`
+- credentials（CookieやHTTP認証情報）は許可しない
+- preflight結果のキャッシュ時間: 24時間
+
+`/slack/zengin` はSlack署名付きリクエスト専用のため、CORS対象外です。
 
 ## レスポンス例
 
@@ -263,7 +311,7 @@ plackup -Ilib app.psgi
 
 アプリケーションは `PORT` 環境変数で待受ポートを受け取り、コンテナ内では `0.0.0.0` で listen する前提です。
 
-Docker で確認する場合は、デフォルトでは `zengin-pl` を Git URL から取得するため、sibling checkout は不要です。
+Docker で確認する場合は、デフォルトでは `zengin-pl.ref` に記録されたcommitをGit URLから取得するため、sibling checkoutは不要です。同じcommitを通常のDocker buildとCloud Run deployで利用するので、API側の変更だけでbackendが意図せず更新されることはありません。
 
 ```bash
 docker build -t zengin-pl-api:dev .
@@ -279,7 +327,7 @@ docker build \
   -t zengin-pl-api:dev .
 ```
 
-`ZENGIN_PL_GIT_REF` は省略可能です。省略した場合は、リモートリポジトリのデフォルトブランチを使います。
+`ZENGIN_PL_GIT_REF` は開発時の一時的な上書き用です。省略した場合は `zengin-pl.ref` の40文字commit SHAを使います。正式にbackendを更新するときは、`zengin-pl.ref` を新しい検証済みSHAへ変更し、通常のpull requestとしてテストします。
 
 Docker build 中の `zengin-pl` は、GitHub clone 後に `cpanm --installdeps` と `cpanm` で標準的に install しています。
 
@@ -373,6 +421,7 @@ export REGION='asia-northeast1'
 export REPOSITORY='zengin-pl-api'
 export IMAGE="asia-northeast1-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/zengin-pl-api:latest"
 export SERVICE='zengin-pl-api'
+export MAX_INSTANCES='3'
 
 gcloud config set project "${PROJECT_ID}"
 
@@ -396,11 +445,14 @@ gcloud run deploy "${SERVICE}" \
   --image "${IMAGE}" \
   --region "${REGION}" \
   --platform managed \
+  --max "${MAX_INSTANCES}" \
   --allow-unauthenticated
 ```
 
 `--allow-unauthenticated` を付けるのは、この API をブラウザや `curl` からそのまま確認しやすくするためです。
 将来的に公開範囲を制限したい場合は、この設定は見直してください。
+
+`--max 3` はサービス全体の最大インスタンス数を3に制限し、公開後の急激なアクセスや意図しない大量リクエストによる費用増加を抑えるための安全上限です。上限到達時は応答遅延やリクエスト拒否が起こり得るため、実際の利用状況を確認してから段階的に引き上げます。急激なトラフィック変動などにより、一時的に上限を超える場合がある点にも注意してください。
 
 Cloud Run では `PORT` 環境変数が自動で注入され、このコンテナはその値で `0.0.0.0` に bind する前提です。
 
@@ -412,9 +464,11 @@ Cloud Run では `PORT` 環境変数が自動で注入され、このコンテ�
 流れ:
 
 1. `prove -lr t` を実行
-2. Docker image を build
-3. Artifact Registry へ push
-4. Cloud Run へ deploy
+2. `zengin-pl.ref` から固定済みbackend revisionを読み込む
+3. Docker image を build
+4. 起動したコンテナをOpenAPI契約と照合
+5. Artifact Registry へ push
+6. 最大インスタンス数3を指定して Cloud Run へ deploy
 
 ### GitHub 側で必要な設定
 
@@ -429,6 +483,7 @@ WIF を使う前提では、GitHub repository の `Variables` に次を設定し
 - region: `asia-northeast1`
 - Artifact Registry repository: `zengin-pl-api`
 - Cloud Run service: `zengin-pl-api`
+- Cloud Run service-level max instances: `3`
 
 認証は `google-github-actions/auth@v3` と `google-github-actions/deploy-cloudrun@v3` を使います。
 
@@ -506,7 +561,7 @@ Cloud Run 上の公開 URL を使って、Slack App に `/zengin` を設定で�
 
 1. Slack App を作成する
 2. `Slash Commands` で `/zengin` を追加する
-3. Request URL に `https://<cloud-run-url>/slack/zengin` を設定する
+3. Request URL に `https://api.zengin.sironekotoro.com/slack/zengin` を設定する
 4. `Basic Information` の `Signing Secret` を控える
 5. App を workspace に install する
 
@@ -538,7 +593,7 @@ verification token ではなく、`X-Slack-Signature` / `X-Slack-Request-Timesta
 
 `/zengin help` では使い方に加えて、`/api/meta` 相当のメタ情報の一部を Slack 向けに整形して返します。
 
-この公開 URL は、将来 Slack endpoint を追加したときの Request URL 候補にもなります。
+この固定URLは、将来Slack endpointを追加したときのRequest URL候補にもなります。
 
 `/api/meta` では、`api.*` は `zengin-pl-api` 自身の情報を返し、`backend.*` と `data.source` は backend の `meta()` を取り込んで返します。
 `data.source` は、今後 `revision` や `updated_at` などを拡張しやすいようにオブジェクトで返しています。
@@ -547,6 +602,8 @@ verification token ではなく、`X-Slack-Signature` / `X-Slack-Request-Timesta
 
 - Cloud Run は未使用時にスケールゼロできる
 - `min instances` は 0 のままにする
+- service-level の `max instances` は workflow と手動 deploy の両方で 3 に固定する
+- 上限到達による遅延や拒否が継続する場合だけ、利用状況と費用を確認して段階的に引き上げる
 - Artifact Registry の image 保存にも課金が発生しうる
 - 不要になった Cloud Run service と Artifact Registry の image は削除する
 - 検証用の tag を増やしすぎない
