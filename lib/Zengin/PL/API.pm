@@ -8,6 +8,7 @@ use Digest::SHA qw(hmac_sha256_hex);
 use Encode qw(decode_utf8);
 use JSON::PP ();
 use URI::Escape qw(uri_unescape);
+use Unicode::Normalize qw(NFKC);
 
 sub new {
     my ($class, %args) = @_;
@@ -509,11 +510,11 @@ sub _handle_search_branches {
     return $self->_backend_error_response($error) if $error;
 
     $branches ||= {};
-    my $branch_rx = qr/\Q$name\E/;
+    my $branch_rx = qr/\Q@{[ $self->_normalize_search_text($name) ]}\E/i;
     my @branches = grep {
-        (defined $_->{name} && $_->{name} =~ $branch_rx)
-            || (defined $_->{kana} && $_->{kana} =~ $branch_rx)
-            || (defined $_->{hira} && $_->{hira} =~ $branch_rx)
+        (defined $_->{name} && $self->_normalize_search_text($_->{name}) =~ $branch_rx)
+            || (defined $_->{kana} && $self->_normalize_search_text($_->{kana}) =~ $branch_rx)
+            || (defined $_->{hira} && $self->_normalize_search_text($_->{hira}) =~ $branch_rx)
             || (defined $_->{code} && $_->{code} =~ $branch_rx)
     } values %{$branches};
     @branches = sort {
@@ -548,6 +549,15 @@ sub _handle_meta {
             source => $backend_meta->{source},
         },
     });
+}
+
+sub _normalize_search_text {
+    my ($self, $value) = @_;
+    return q{} if !defined $value;
+
+    my $normalized = NFKC($value);
+    $normalized =~ tr/\x{30A1}-\x{30F6}/\x{3041}-\x{3096}/;
+    return $normalized;
 }
 
 sub _find_bank {

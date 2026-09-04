@@ -255,7 +255,12 @@ components:
       name: name
       in: query
       required: true
-      description: 名称、かな、コードの全部または一部
+      description: |
+        名称、かな、コードの全部または一部。比較はUnicode正規化(NFKC)により
+        半角/全角・英字の大文字小文字・半角カナ/全角カナの違いを吸収して
+        行われます(例: `ufj` / `ＵＦＪ` / `ｕｆｊ` はいずれも同じ名称に一致)。
+        業態接尾辞(銀行/信用金庫/信用組合/労働金庫/農業協同組合/漁業協同組合)の
+        自動的な除去・補完は行いません。
       schema:
         type: string
         minLength: 1
