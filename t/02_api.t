@@ -120,6 +120,8 @@ subtest 'branch search filters the fetched branch list without backend search' =
         ['code', '01', ['001', '010']],
         ['no match', '札幌', []],
         ['literal regular-expression characters', '.', []],
+        ['halfwidth kana normalizes to zenkaku kana/hiragana data', 'ﾄｳｷﾖｳ', ['001']],
+        ['fullwidth digit code normalizes to hankaku code data', '００１', ['001']],
     );
 
     for my $case (@cases) {
