@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: shogo82148/actions-setup-perl@v1
         with:
@@ -20,6 +20,14 @@ jobs:
           cpanm --notest --installdeps .
 
       - name: Run tests
+        env:
+          # Test2::Formatter::TAPは初期化時にSTDOUT/STDERRを複製するため、
+          # テストファイル内でのbinmode(...)はそれより後に実行され効かない
+          # ("Wide character in print"の原因)。Test2::Plugin::UTF8は複製後の
+          # formatter handleへ直接encodingを適用する公式の仕組みなので、
+          # PERL5OPT経由で全テストプロセスに一律注入する
+          # (Test-Simple配布物に同梱されており追加依存は不要)。
+          PERL5OPT: -MTest2::Plugin::UTF8=encoding_only
         run: |
           prove -lr t
 
@@ -36,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build Docker image
         run: |
