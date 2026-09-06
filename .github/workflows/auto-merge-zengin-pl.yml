@@ -18,10 +18,21 @@ name: Auto-merge zengin-pl pin
 # 再確認せず、bin/auto-merge-zengin-pl-pr.shが`gh`経由で毎回新しく
 # 取得し直す。`workflow_run`のpayloadは「起こしにいくきっかけ」以上には
 # 信用しない。
+#
+# workflow_runだけでは再評価されないケースに注意:
+#   soft rejectの一部(blocking reviewの解除・review threadの解決・
+#   一時的なmergeable=UNKNOWNの解消)はPRへの新しいcommit pushを
+#   伴わないため、`test`workflowを再実行させず、workflow_runも
+#   発火しない。そのため15分間隔のscheduleを"再評価のfallback"として
+#   追加している(通常経路であるworkflow_runの条件・頻度は変えない)。
+#   即座に反映したい場合はworkflow_dispatchで手動実行できる。
 on:
   workflow_run:
     workflows: ["test"]
     types: [completed]
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
 
 concurrency:
   group: auto-merge-zengin-pl
@@ -35,11 +46,20 @@ permissions:
 jobs:
   auto-merge:
     runs-on: ubuntu-latest
+    # workflow_run由来のときだけ、関係ないPR/branchのCI完了で無駄に
+    # 走らないよう追加のfilterを課す。schedule/workflow_dispatchには
+    # そもそもこのfilterの対象となるpayloadが無いので素通りさせる
+    # (実際に何かmergeできる状態かどうかの判定は全てscript側で行う)。
     if: >
       github.repository == 'sironekotoro/zengin-pl-api' &&
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'chore/update-zengin-pl'
+      (
+        github.event_name != 'workflow_run' ||
+        (
+          github.event.workflow_run.event == 'pull_request' &&
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.head_branch == 'chore/update-zengin-pl'
+        )
+      )
     steps:
       - uses: actions/checkout@v7
         with:

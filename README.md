@@ -474,14 +474,14 @@ Slack の署名付き request は手で作りにくいため、まずは Slack A
 9. 未解決のreview threadが無い
 10. GitHub上でconflictなくmergeできる状態(`mergeable == MERGEABLE`)
 11. ここまでの検証開始時に読んだPRのhead SHAが、mergeを呼び出す直前でも変わっていない
-    (変わっていれば中断し、次回のworkflow実行で再評価する)
+    (変わっていれば中断する。再評価のタイミングは次項)
 
 ### trigger設計とrace condition対策
 
-`auto-merge-zengin-pl.yml`は、このrepository自身のCI workflow(`test`)が完了した`workflow_run`で
-起動します。`workflow_run`でトリガされるworkflowの定義は常にdefault branch(`main`)上の内容が
-使われるため、`chore/update-zengin-pl`branch自体に何が含まれていても、実行されるコードは常に
-信頼できる`main`の版になります。
+`auto-merge-zengin-pl.yml`は主に、このrepository自身のCI workflow(`test`)が完了した
+`workflow_run`で起動します。`workflow_run`でトリガされるworkflowの定義は常にdefault branch
+(`main`)上の内容が使われるため、`chore/update-zengin-pl`branch自体に何が含まれていても、
+実行されるコードは常に信頼できる`main`の版になります。
 
 ただし、triggerの`workflow_run` payload自体は「起こしにいくきっかけ」以上には信用しません。
 実際の判定に使う author・branch・変更ファイル・diff・reviews・CI結果・head SHAは、すべて
@@ -491,16 +491,33 @@ mergeを呼び出す直前に再取得したものが一致することを確認
 `chore/update-zengin-pl`branchが新しいSHAへforce pushされて書き換わっていた場合、
 GitHub側でも古いhead SHAへのmergeがatomicに拒否されます。
 
+**`workflow_run`だけでは再評価されないケースがある。** `workflow_run`は`test`workflowの
+完了時にしか発火しません。しかし条件8(blocking review)・9(未解決thread)・10(mergeableが
+一時的に`UNKNOWN`)は、PRへの新しいcommit pushを伴わずに解消されることが多く(reviewの
+dismiss、threadのresolve、GitHub側のmergeable再計算待ちなど)、その場合`test`は再実行されず
+`workflow_run`も発火しません。これを放置すると、人間が問題を解消したのにPRがopenのまま
+気づかれず残ることになります。
+
+そのため`auto-merge-zengin-pl.yml`には、`workflow_run`に加えて15分間隔の`schedule`と
+`workflow_dispatch`も追加しています。`schedule`/`workflow_dispatch`のときは
+`workflow_run`固有のfilter(event種別・conclusion・head_branch)を素通りさせ、
+`chore/update-zengin-pl`→`main`の未mergeのPRがあれば無条件で全条件を再評価します
+(該当PRが無ければ`gh pr list`が空を返してすぐ終わるだけなので、通常時のコストはほぼ
+ありません)。これにより、原因を問わず最大15分以内に必ず再評価される経路を保証しています。
+通常経路である`workflow_run`側のfilter・頻度は変更していません。
+
 ### fail-safeの挙動
 
 条件を満たさない場合は2種類に分けています。
 
 - **一時的な未達成(exit 0、正常終了)**: CI未完了・reviewでの変更依頼・未解決thread・
-  merge不可・head SHAの変化など。「今はまだ」なだけなので、次回のworkflow実行で再評価します。
-  PRはopenのまま残ります。
+  merge不可・head SHAの変化など。「今はまだ」なだけなので、次に`test`が再実行されたとき、
+  または遅くとも15分間隔の`schedule`実行時に再評価します。PRはopenのまま残ります。
 - **構造的な異常(exit 1、Actions上を赤くする)**: 想定外のauthor・branch・変更ファイル・diff形状など。
   このbranchは`sync-zengin-pl-ref.sh`だけが操作する想定のため、これらが崩れているのは
   script・branch保護・権限設定のどこかに問題がある可能性が高く、気づけるようにしています。
+  こちらも15分間隔の`schedule`で再評価されますが、原因(想定外のauthor/branch/diff形状)は
+  外的要因では解消しないため、根本原因を直さない限り赤いままになります。
 
 どちらの場合もmergeは実行されず、PRはopenのまま残ります。
 
