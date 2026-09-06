@@ -1,0 +1,57 @@
+name: Sync zengin-pl pin
+
+# zengin-pl の master が新しいverified commitへ進んだら、zengin-pl.ref を
+# 追随させる更新PRを作成する。
+#
+# 意図的にpull型にしている: zengin-pl側からのpush/dispatchを受け取るので
+# はなく、この workflow が自分自身のスケジュールでzengin-plの公開commit/
+# check-run情報をGitHub APIで読みに行く。そのため:
+#   - zengin-pl側には一切変更・secret・権限追加が不要
+#   - 外部からのevent payload(repository/sender等)を信頼する必要がない
+#     (そもそも外部payloadを受け取らないため、payload偽装というリスクの
+#     カテゴリ自体が発生しない)
+#   - 書き込み権限はこのworkflow・このrepositoryだけに閉じる
+#
+# merge・Cloud Runへのdeployは行わない。ここで作るのはPRまで。
+# mergeされた後は既存の deploy.yml が通常どおり動く。
+on:
+  schedule:
+    # 30分間隔。zengin-plのcommit頻度に対して十分な追随速度で、GitHub API
+    # の匿名/既定rate limitにも余裕を持って収まる。急ぎたい場合は
+    # workflow_dispatchで手動実行できる。
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: >-
+          pinしたいzengin-plのcommit SHA(40桁16進数)。省略時はzengin-pl
+          master HEADを使う。手動実行時も自動実行と全く同じ検証
+          (master祖先チェック・Perl matrix成功チェック)を通過する必要がある。
+        required: false
+        type: string
+
+# 複数run(定期実行と手動実行など)が同時にbranchへ書き込むのを避ける。
+# cancel-in-progressはfalseにして、実行中のgit push/PR操作を途中で
+# 打ち切らせない(キューイングして直列化する)。
+concurrency:
+  group: sync-zengin-pl
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    # fork由来のrunや、このrepository以外からのrunでは書き込みをさせない。
+    if: github.repository == 'sironekotoro/zengin-pl-api'
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Sync zengin-pl.ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_SHA: ${{ github.event.inputs.sha }}
+        run: |
+          bash bin/sync-zengin-pl-ref.sh "$REQUESTED_SHA"
