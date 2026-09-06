@@ -328,6 +328,24 @@ plackup -Ilib app.psgi
 
 アプリケーションは `PORT` 環境変数で待受ポートを受け取り、コンテナ内では `0.0.0.0` で listen する前提です。
 
+### テストの実行
+
+```bash
+prove -lr t
+```
+
+日本語を含むtest名・diagnosticを扱うテスト([t/05_http_cache.t](t/05_http_cache.t)など)では、
+環境によって `Wide character in print at .../Test2/Formatter/TAP.pm` という警告が出ることがあります。
+これは`Test2::Formatter::TAP`がTest2初期化時にSTDOUT/STDERRを複製するため、テストファイル内の
+`binmode(...)`がそれより後に実行され効かないことが原因です(テストの結果自体には影響しません)。
+CIでは[`Test2::Plugin::UTF8`](https://metacpan.org/pod/Test2::Plugin::UTF8)(`Test::More`と同じ
+`Test-Simple`配布物に同梱済みで追加依存不要)を`PERL5OPT`経由で注入して解消しています。
+ローカルで同じく警告なしにしたい場合は、同じ環境変数を設定してください。
+
+```bash
+PERL5OPT="-MTest2::Plugin::UTF8=encoding_only" prove -lr t
+```
+
 Docker で確認する場合は、デフォルトでは `zengin-pl.ref` に記録されたcommitをGit URLから取得するため、sibling checkoutは不要です。同じcommitを通常のDocker buildとCloud Run deployで利用するので、API側の変更だけでbackendが意図せず更新されることはありません。
 
 ```bash

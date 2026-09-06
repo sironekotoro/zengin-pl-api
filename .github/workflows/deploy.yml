@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: shogo82148/actions-setup-perl@v1
         with:
@@ -34,6 +34,10 @@ jobs:
           cpanm --notest --installdeps .
 
       - name: Run tests
+        env:
+          # test.ymlと同じ理由(Test2::Formatter::TAPのhandle複製タイミング
+          # 問題)によるWide character in print対策。詳細はtest.ymlのコメント参照。
+          PERL5OPT: -MTest2::Plugin::UTF8=encoding_only
         run: |
           prove -lr t
 
