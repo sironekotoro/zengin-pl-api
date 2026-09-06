@@ -1,0 +1,53 @@
+name: Auto-merge zengin-pl pin
+
+# sync-zengin-pl.ymlが作るchore/update-zengin-pl PRについて、極めて限定
+# された安全条件を全て満たした場合だけ自動でmergeする。
+#
+# なぜ`workflow_run`か:
+#   - `test`workflow(Perl tests・OpenAPI lint・Docker build・Schemathesis
+#     contract test)が完了してから動く。CI結果を待たずに判定しない。
+#   - `workflow_run`でトリガされたjobの定義は、トリガ元branchの内容では
+#     なく常にdefault branch(main)上のこのファイルが使われる。そのため
+#     chore/update-zengin-pl branch自体に(このbotが作る想定通りの
+#     zengin-pl.ref変更以外)何が含まれていても、実行されるworkflowの
+#     コード自体は常にmainの信頼できる版になる。
+#   - このrepository自身のCIを対象にしており、fork PRは一切関与しない。
+#
+# 実際の判定条件(author・branch・変更ファイル・diff形状・reviews・
+# zengin-pl/zengin-pl-api双方のCI・head SHAのrace確認)は全てここでは
+# 再確認せず、bin/auto-merge-zengin-pl-pr.shが`gh`経由で毎回新しく
+# 取得し直す。`workflow_run`のpayloadは「起こしにいくきっかけ」以上には
+# 信用しない。
+on:
+  workflow_run:
+    workflows: ["test"]
+    types: [completed]
+
+concurrency:
+  group: auto-merge-zengin-pl
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: >
+      github.repository == 'sironekotoro/zengin-pl-api' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'chore/update-zengin-pl'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 常にmain(信頼できる既定branch)をcheckoutする。判定対象のPRの
+          # 内容はscriptがgh経由でAPI越しに読むだけで、実行はしない。
+          ref: main
+
+      - name: Evaluate and merge the pin-update PR if it is safe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash bin/auto-merge-zengin-pl-pr.sh

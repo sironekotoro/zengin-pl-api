@@ -388,19 +388,24 @@ Slack の署名付き request は手で作りにくいため、まずは Slack A
 
 ### 自動化されるもの・されないもの
 
-自動化されるのは **PR作成まで** です。
+自動化されているのは **PR作成からmergeまで** です。ただしmergeは、後述する極めて限定された
+安全条件をすべて満たした場合だけ行われます。
 
 - `zengin-pl` masterのHEADを定期的に確認する(30分間隔 + 手動実行)
 - そのSHAが実在し、`zengin-pl`のmaster履歴上にあり、Perl test matrixが全て成功していることを検証する
 - 検証済みなら `chore/update-zengin-pl` branchで `zengin-pl.ref` だけを更新し、更新PRを作成(既存PRがあれば内容を更新)する
+- 上記PRの`zengin-pl-api`側CI([`test.yml`](.github/workflows/test.yml))が完了したら、
+  [`auto-merge-zengin-pl.yml`](.github/workflows/auto-merge-zengin-pl.yml)が全条件を再検証し、
+  満たしていれば自動でmergeする
 
 自動化されないもの:
 
-- **PRのmerge**。zengin-plの変更が本APIにとって意味的に問題ないか(例: 検索ロジック変更でAPIレスポンスが変わる等)は、
-  テストPASSだけでは判断できないため、人間が内容を確認してmergeします。
-- **Cloud Runへのdeploy**。上記PRが人間によって`main`へmergeされた後、既存の[`deploy.yml`](.github/workflows/deploy.yml)が
-  通常どおりPerl test・Docker build・OpenAPI検証・Schemathesis contract test・deployを実行します。この自動化自身は
-  一切deployしません。
+- **一般のPRやhuman作成PRのmerge**。auto-mergeの対象は`chore/update-zengin-pl`から`main`への、
+  `github-actions[bot]`作成・`zengin-pl.ref`のSHA1行置換だけのPRに限られます(詳細は次項)。
+  それ以外のPRは今までどおり人間がmergeします。
+- **Cloud Runへのdeploy**。PRが(自動または人間の手で)`main`へmergeされた後、既存の
+  [`deploy.yml`](.github/workflows/deploy.yml)が通常どおりPerl test・Docker build・OpenAPI検証・
+  Schemathesis contract test・deployを実行します。この自動化自身は一切deployしません。
 - `zengin-pl.ref` 以外のファイル(APIコード・OpenAPI・Dockerfile等)の変更。
 
 ### なぜpull型(スケジュール実行)にしたか
@@ -449,13 +454,72 @@ Slack の署名付き request は手で作りにくいため、まずは Slack A
   (40文字16進数の形式チェック、`zengin-pl`に実在するか、master履歴上にあるか、Perl test matrixが
   全て成功しているか)を通過しない限り更新PRは作成されません。
 
-### 人間がmergeする理由
+手動実行で作られる・更新されるPRも同じ`chore/update-zengin-pl`branchを使うため、CIが完了すれば
+[auto-merge](#auto-mergeの条件)の対象に通常どおり含まれます。
 
-`zengin-pl`のCIが成功していても、それがzengin-pl-apiにとって意味的に問題ないとは限りません
-(例: 検索の一致条件が変わり、既存クライアントの想定と異なる結果を返すようになる、等)。
-そのため、このrepositoryではbranch protectionやauto-mergeを設定せず、更新PRは常に人間が内容を
-確認してからmergeする運用にしています。mergeされた後は、既存の`deploy.yml`が通常どおりテスト・
-contract検証・Cloud Run deployを行います。
+### auto-mergeの条件
+
+[`bin/auto-merge-zengin-pl-pr.sh`](bin/auto-merge-zengin-pl-pr.sh)は、以下を**すべて**満たした場合だけ
+更新PRをmergeします。1つでも満たさなければmergeしません。
+
+1. `chore/update-zengin-pl` → `main` へのPRが実際に存在する(`gh pr list`でこの組み合わせだけを取得)
+2. PR作成者が `app/github-actions`(このrepository自身の`sync-zengin-pl.yml`が作るPRだけを対象にする)
+3. PRがdraftではない
+4. 変更ファイルが正確に1つで、それが `zengin-pl.ref` である
+5. diffが「40文字小文字hex SHA 1行 → 別の40文字小文字hex SHA 1行」の置換だけである
+6. 新SHAが`zengin-pl`に実在し、masterの履歴上にあり、Perl test matrixが全て成功している
+   (PR作成時の検証を信用せず、ここでもう一度取り直して確認する)
+7. `zengin-pl-api`自身のこのPRに対するcheck-runsが1件以上あり、全て成功している
+8. `CHANGES_REQUESTED`のreviewが無い
+9. 未解決のreview threadが無い
+10. GitHub上でconflictなくmergeできる状態(`mergeable == MERGEABLE`)
+11. ここまでの検証開始時に読んだPRのhead SHAが、mergeを呼び出す直前でも変わっていない
+    (変わっていれば中断し、次回のworkflow実行で再評価する)
+
+### trigger設計とrace condition対策
+
+`auto-merge-zengin-pl.yml`は、このrepository自身のCI workflow(`test`)が完了した`workflow_run`で
+起動します。`workflow_run`でトリガされるworkflowの定義は常にdefault branch(`main`)上の内容が
+使われるため、`chore/update-zengin-pl`branch自体に何が含まれていても、実行されるコードは常に
+信頼できる`main`の版になります。
+
+ただし、triggerの`workflow_run` payload自体は「起こしにいくきっかけ」以上には信用しません。
+実際の判定に使う author・branch・変更ファイル・diff・reviews・CI結果・head SHAは、すべて
+scriptが`gh`経由でその場で取得し直します。特にhead SHAは、検証を始めた時点のものと、
+mergeを呼び出す直前に再取得したものが一致することを確認し(条件11)、さらにGitHubのmerge API
+自体にも期待するhead SHA(`sha`パラメータ)を渡します。これにより、検証中に
+`chore/update-zengin-pl`branchが新しいSHAへforce pushされて書き換わっていた場合、
+GitHub側でも古いhead SHAへのmergeがatomicに拒否されます。
+
+### fail-safeの挙動
+
+条件を満たさない場合は2種類に分けています。
+
+- **一時的な未達成(exit 0、正常終了)**: CI未完了・reviewでの変更依頼・未解決thread・
+  merge不可・head SHAの変化など。「今はまだ」なだけなので、次回のworkflow実行で再評価します。
+  PRはopenのまま残ります。
+- **構造的な異常(exit 1、Actions上を赤くする)**: 想定外のauthor・branch・変更ファイル・diff形状など。
+  このbranchは`sync-zengin-pl-ref.sh`だけが操作する想定のため、これらが崩れているのは
+  script・branch保護・権限設定のどこかに問題がある可能性が高く、気づけるようにしています。
+
+どちらの場合もmergeは実行されず、PRはopenのまま残ります。
+
+### merge方法とGitHub側で必要な設定
+
+mergeは`merge_method=merge`(merge commit)を使います。このrepositoryの既存PR(#1〜#11)は
+全て"Merge pull request #N from ..."形式のmerge commitで統合されており、既存運用に合わせました。
+squashやrebaseへは変更していません。
+
+GitHub Native Auto-merge機能(「Enable auto-merge」ボタンやbranch単位の`auto_merge`設定)は
+**使っていません**。判定から即mergeまでを自前のscriptで行うことで、条件再検証のタイミングを
+厳密に制御しています。そのため、repository設定の`Allow auto-merge`が無効(このrepositoryの
+現状のまま)でも問題なく動作します。
+
+このrepositoryには現在branch protectionが設定されていません(`main`に対する必須review・必須
+status checkはありません)。今回のauto-merge機構はこれを前提にせず、必要な確認(CI成功・review
+状態・conflictの有無)を全てscript側で明示的に行っています。より高い安全性を求める場合は、
+`main`にbranch protection(必須status check `test` / `docker`)を設定することを推奨しますが、
+これはrepository全体のmerge policyに関わる変更のため、今回は実施せず提案に留めます。
 
 ## デプロイ方針
 

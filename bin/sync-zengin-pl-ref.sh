@@ -8,28 +8,22 @@
 #     zengin-pl-api自身のGitHub Actions runからzengin-plの公開commit/
 #     check-run情報をGitHub APIで読むだけの「pull型」。
 #   - zengin-pl.ref以外のファイルは変更しない。
-#   - merge・auto-mergeは行わない。PR作成までが責務。
+#   - merge・auto-mergeは行わない。PR作成までが責務
+#     (auto-merge自体はauto-merge-zengin-pl-pr.shが別workflowで行う)。
 #
 # 関数はunit test(t/06_sync_script.t)からsourceして個別に呼び出せるよう、
 # ネットワーク/gitに依存する処理と純粋なロジックを分離している。
+# zengin-pl側のSHA検証はbin/lib/zengin-pl-verify.shを共用する。
 set -euo pipefail
 
-ZENGIN_PL_REPO="${ZENGIN_PL_REPO:-sironekotoro/zengin-pl}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/zengin-pl-verify.sh
+source "${SCRIPT_DIR}/lib/zengin-pl-verify.sh"
+
 ZENGIN_PL_REF_FILE="${ZENGIN_PL_REF_FILE:-zengin-pl.ref}"
 SYNC_BRANCH="${SYNC_BRANCH:-chore/update-zengin-pl}"
-SHA_RE='^[0-9a-f]{40}$'
 
-# --- 純粋なロジック(network/git不要、または引数で渡されたrepoに対してのみ動作) ---
-
-validate_sha_format() {
-    local sha="$1"
-    [[ "$sha" =~ $SHA_RE ]]
-}
-
-short_sha() {
-    local sha="$1"
-    printf '%s' "${sha:0:12}"
-}
+# --- 純粋なロジック(network/git不要) ---
 
 current_pinned_sha() {
     local ref_file="$1"
@@ -82,61 +76,17 @@ zengin-pl側のmaster branch上で存在が確認され、Perl test matrixが
 の1行だけです。
 
 mergeすると、既存の deploy workflow (\`.github/workflows/deploy.yml\`) が
-通常どおり実行され、Cloud Runへ自動deployされます。**このPRは自動merge
-されません。** 内容(特にzengin-pl側の変更が本APIにとって意味的に問題
-ないか)を人間が確認してからmergeしてください。
+通常どおり実行され、Cloud Runへ自動deployされます。
+
+このPRは条件を満たせば[auto-merge-zengin-pl.yml](.github/workflows/auto-merge-zengin-pl.yml)
+により自動でmergeされます(author・branch・変更ファイル・diff形状・
+zengin-pl/zengin-pl-api双方のCI結果などを再検証したうえで、全て満たした
+場合のみ)。条件を満たさない場合はopenのまま残るので、その際は内容を
+確認して人間がmergeしてください。
 EOF
 }
 
 # --- git/gh に依存する処理 ---
-
-# $1: zengin-plをcloneしたローカルpathで、origin/masterがfetch済みであること
-# $2: 検証したいSHA
-commit_exists() {
-    local clone_dir="$1" sha="$2"
-    git -C "$clone_dir" cat-file -e "${sha}^{commit}" 2>/dev/null
-}
-
-is_ancestor_of_master() {
-    local clone_dir="$1" sha="$2"
-    git -C "$clone_dir" merge-base --is-ancestor "$sha" origin/master
-}
-
-clone_zengin_pl() {
-    local dest="$1"
-    git clone --quiet "https://github.com/${ZENGIN_PL_REPO}.git" "$dest"
-}
-
-fetch_master_head_sha() {
-    gh api "repos/${ZENGIN_PL_REPO}/commits/master" --jq .sha
-}
-
-# zengin-pl側のPerl matrix (actions.yml の `Perl 5.xx` job) が
-# 全て成功しているかを確認する。該当check-runが1件も無い場合も
-# 「未検証」として失敗扱いにする(fail-safe: 何もしない側へ倒す)。
-check_runs_all_success() {
-    local sha="$1"
-    local runs count not_success
-
-    runs="$(gh api "repos/${ZENGIN_PL_REPO}/commits/${sha}/check-runs" --jq \
-        '[.check_runs[] | select(.name | startswith("Perl "))]')"
-    count="$(jq 'length' <<<"$runs")"
-
-    if [[ "$count" -eq 0 ]]; then
-        echo "::warning::no Perl matrix check-runs found for ${sha}" >&2
-        return 1
-    fi
-
-    not_success="$(jq '[.[] | select(.status != "completed" or .conclusion != "success")] | length' <<<"$runs")"
-    [[ "$not_success" -eq 0 ]]
-}
-
-# check-runsの中から代表となる1件のURLを「検証元」として報告用に返す。
-representative_check_run_url() {
-    local sha="$1"
-    gh api "repos/${ZENGIN_PL_REPO}/commits/${sha}/check-runs" --jq \
-        '[.check_runs[] | select(.name | startswith("Perl "))][0].html_url // empty'
-}
 
 ensure_update_pr() {
     local branch="$1" title="$2" body_file="$3"
@@ -191,18 +141,7 @@ main() {
     echo "Cloning ${ZENGIN_PL_REPO} to verify ${target_sha}"
     clone_zengin_pl "$clone_dir"
 
-    if ! commit_exists "$clone_dir" "$target_sha"; then
-        echo "::error::commit ${target_sha} does not exist in ${ZENGIN_PL_REPO}" >&2
-        exit 1
-    fi
-
-    if ! is_ancestor_of_master "$clone_dir" "$target_sha"; then
-        echo "::error::commit ${target_sha} is not on ${ZENGIN_PL_REPO}'s master history" >&2
-        exit 1
-    fi
-
-    if ! check_runs_all_success "$target_sha"; then
-        echo "::error::${target_sha} does not have a fully successful Perl test matrix; refusing to pin an unverified commit" >&2
+    if ! verify_zengin_pl_sha "$clone_dir" "$target_sha"; then
         exit 1
     fi
 
