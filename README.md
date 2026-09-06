@@ -101,6 +101,23 @@ npx --yes @redocly/cli@2.50.0 lint openapi.yaml --extends=spec
 
 `/slack/zengin` はSlack署名付きリクエスト専用のため、CORS対象外です。
 
+### HTTPキャッシュ
+
+`/api` 配下の公開GETエンドポイント（`/api/meta`、`/api/banks`、`/api/banks/{bankCode}`、
+`/api/banks/{bankCode}/branches`、`/api/banks/{bankCode}/branches/{branchCode}`）は
+`Cache-Control` と `ETag` を返し、条件付きリクエストに対応します。
+
+- `Cache-Control: public, max-age=60`（`/api/meta` のみ。revision/updated_at確認用途のため短め）
+- `Cache-Control: public, max-age=300`（その他のGETエンドポイント）
+- `ETag`: レスポンスbody（canonical JSON）のSHA-256から生成した強いvalidator。同じルート・
+  同じクエリで内容が変わらない限り安定し、検索クエリが違えばbodyも変わるためETagも変わる
+- `If-None-Match` が現在の `ETag` と一致する場合は `304 Not Modified` を返す（body なし）。
+  カンマ区切りの複数validator・`W/` 弱いvalidator・`*` も受け付ける
+- 304レスポンスでも `ETag` / `Cache-Control` / CORS headerは200と同様に付与する
+- エラー応答（400/404/405/500）にはこの公開cache policyを付けない
+
+`/slack/zengin` はこのcache処理の対象外です。
+
 ## レスポンス例
 
 ### メタ情報確認

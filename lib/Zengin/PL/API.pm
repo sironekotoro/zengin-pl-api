@@ -4,11 +4,17 @@ use strict;
 use warnings;
 use utf8;
 
-use Digest::SHA qw(hmac_sha256_hex);
+use Digest::SHA qw(hmac_sha256_hex sha256_hex);
 use Encode qw(decode_utf8);
 use JSON::PP ();
 use URI::Escape qw(uri_unescape);
 use Unicode::Normalize qw(NFKC);
+
+# 銀行・支店マスタは頻繁に更新されないが、mirrorは定期更新されるため
+# 極端に長いTTLは避ける。/api/meta はrevision/updated_at確認用途にも
+# 使われるため、他のエンドポイントより短いTTLにする。
+use constant META_CACHE_MAX_AGE    => 60;
+use constant DEFAULT_CACHE_MAX_AGE => 300;
 
 sub new {
     my ($class, %args) = @_;
@@ -56,19 +62,19 @@ sub handle_request {
     }
 
     if ($path =~ m{\A/api/meta/?\z}) {
-        return $self->_handle_meta;
+        return $self->_handle_meta($env);
     }
 
     if ($path =~ m{\A/api/banks/(\d{4})/branches/(\d{3})/?\z}) {
-        return $self->_handle_get_branch($1, $2);
+        return $self->_handle_get_branch($env, $1, $2);
     }
 
     if ($path =~ m{\A/api/banks/(\d{4})/branches/?\z}) {
-        return $self->_handle_search_branches($1, $env);
+        return $self->_handle_search_branches($env, $1);
     }
 
     if ($path =~ m{\A/api/banks/(\d{4})/?\z}) {
-        return $self->_handle_get_bank($1);
+        return $self->_handle_get_bank($env, $1);
     }
 
     if ($path =~ m{\A/api/banks/?\z}) {
@@ -420,7 +426,7 @@ sub _slack_backend_error_message {
 }
 
 sub _handle_get_bank {
-    my ($self, $bank_code) = @_;
+    my ($self, $env, $bank_code) = @_;
 
     my ($bank, $error) = $self->_call_backend('get_bank', $bank_code);
     return $self->_backend_error_response($error) if $error;
@@ -434,9 +440,9 @@ sub _handle_get_bank {
         });
     }
 
-    return $self->_json_response(200, {
+    return $self->_cacheable_json_response($env, {
         bank => $self->_normalize_bank($bank),
-    });
+    }, DEFAULT_CACHE_MAX_AGE);
 }
 
 sub _handle_search_banks {
@@ -459,13 +465,13 @@ sub _handle_search_banks {
 
     $banks ||= [];
 
-    return $self->_json_response(200, {
+    return $self->_cacheable_json_response($env, {
         banks => [map { $self->_normalize_bank($_) } @{$banks}],
-    });
+    }, DEFAULT_CACHE_MAX_AGE);
 }
 
 sub _handle_get_branch {
-    my ($self, $bank_code, $branch_code) = @_;
+    my ($self, $env, $bank_code, $branch_code) = @_;
 
     my ($bank, $bank_error_response) = $self->_find_bank($bank_code);
     return $bank_error_response if $bank_error_response;
@@ -482,14 +488,14 @@ sub _handle_get_branch {
         });
     }
 
-    return $self->_json_response(200, {
+    return $self->_cacheable_json_response($env, {
         bank   => $self->_slice_fields($bank, qw(code name)),
         branch => $self->_normalize_branch($branch),
-    });
+    }, DEFAULT_CACHE_MAX_AGE);
 }
 
 sub _handle_search_branches {
-    my ($self, $bank_code, $env) = @_;
+    my ($self, $env, $bank_code) = @_;
 
     my ($bank, $bank_error_response) = $self->_find_bank($bank_code);
     return $bank_error_response if $bank_error_response;
@@ -521,19 +527,19 @@ sub _handle_search_branches {
         ($a->{code} // q{}) cmp ($b->{code} // q{})
     } @branches;
 
-    return $self->_json_response(200, {
+    return $self->_cacheable_json_response($env, {
         bank     => $self->_slice_fields($bank, qw(code name)),
         branches => [map { $self->_slice_fields($_, qw(code name)) } @branches],
-    });
+    }, DEFAULT_CACHE_MAX_AGE);
 }
 
 sub _handle_meta {
-    my ($self) = @_;
+    my ($self, $env) = @_;
 
     my $backend = $self->_backend;
     my $backend_meta = $self->_backend_meta($backend);
 
-    return $self->_json_response(200, {
+    return $self->_cacheable_json_response($env, {
         api => {
             name       => defined $ENV{APP_NAME} ? $ENV{APP_NAME} : 'zengin-pl-api',
             version    => $self->_env_or_undef('APP_VERSION'),
@@ -548,7 +554,7 @@ sub _handle_meta {
         data => {
             source => $backend_meta->{source},
         },
-    });
+    }, META_CACHE_MAX_AGE);
 }
 
 sub _normalize_search_text {
@@ -769,6 +775,58 @@ sub _json_response {
         ],
         [$body],
     ];
+}
+
+# 公開GET APIの200レスポンス専用。ETagはbodyのJSON表現(canonicalモードで
+# key順が安定)そのもののSHA-256から生成する強いvalidatorとする。同じ
+# ルート・同じクエリなら同じbodyになりETagも一致し、bodyが変わればETagも
+# 必ず変わるため、revisionだけをETagにする方式よりvariant(検索クエリ違い等)
+# を安全に区別できる。backendへの追加fetchも発生しない。
+sub _cacheable_json_response {
+    my ($self, $env, $payload, $max_age) = @_;
+
+    my $body          = $self->{json}->encode($payload);
+    my $etag          = q{"} . sha256_hex($body) . q{"};
+    my $cache_control = "public, max-age=$max_age";
+
+    if ($self->_if_none_match_satisfied($env->{HTTP_IF_NONE_MATCH}, $etag)) {
+        return [
+            304,
+            [
+                'ETag'          => $etag,
+                'Cache-Control' => $cache_control,
+            ],
+            [],
+        ];
+    }
+
+    return [
+        200,
+        [
+            'Content-Type'   => 'application/json; charset=utf-8',
+            'Content-Length' => length $body,
+            'ETag'           => $etag,
+            'Cache-Control'  => $cache_control,
+        ],
+        [$body],
+    ];
+}
+
+# RFC 7232 If-None-Match: "*"、複数validatorのカンマ区切り、弱いvalidator
+# (W/接頭辞)を許容する。ここで生成するETagは常に強いvalidatorだが、比較は
+# 弱い比較(W/接頭辞を無視した完全一致)で行う。
+sub _if_none_match_satisfied {
+    my ($self, $header_value, $etag) = @_;
+
+    return 0 if !defined $header_value || $header_value eq q{};
+    return 1 if $header_value eq '*';
+
+    for my $token (split /\s*,\s*/, $header_value) {
+        $token =~ s/\AW\///;
+        return 1 if $token eq $etag;
+    }
+
+    return 0;
 }
 
 sub _slack_response {

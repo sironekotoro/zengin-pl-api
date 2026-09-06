@@ -42,9 +42,16 @@ paths:
       operationId: getMeta
       summary: メタ情報を取得する
       tags: [Metadata]
+      parameters:
+        - $ref: '#/components/parameters/IfNoneMatch'
       responses:
         '200':
           description: API、backend、データソースのメタ情報
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlMeta'
           content:
             application/json:
               schema:
@@ -64,6 +71,8 @@ paths:
                     kind: zengin-data-mirror
                     revision: abc1234
                     updated_at: '20260824'
+        '304':
+          $ref: '#/components/responses/NotModified'
   /api/banks:
     options:
       operationId: preflightBanks
@@ -78,13 +87,21 @@ paths:
       tags: [Banks]
       parameters:
         - $ref: '#/components/parameters/SearchName'
+        - $ref: '#/components/parameters/IfNoneMatch'
       responses:
         '200':
           description: 検索結果。該当しない場合は空配列
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlDefault'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/BankSearchResponse'
+        '304':
+          $ref: '#/components/responses/NotModified'
         '400':
           $ref: '#/components/responses/InvalidRequest'
         '500':
@@ -103,13 +120,22 @@ paths:
       operationId: getBank
       summary: 銀行コードで銀行を取得する
       tags: [Banks]
+      parameters:
+        - $ref: '#/components/parameters/IfNoneMatch'
       responses:
         '200':
           description: 銀行情報
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlDefault'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/BankResponse'
+        '304':
+          $ref: '#/components/responses/NotModified'
         '404':
           $ref: '#/components/responses/BankNotFound'
         '500':
@@ -130,13 +156,21 @@ paths:
       tags: [Branches]
       parameters:
         - $ref: '#/components/parameters/SearchName'
+        - $ref: '#/components/parameters/IfNoneMatch'
       responses:
         '200':
           description: 銀行情報と支店検索結果。該当しない場合は空配列
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlDefault'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/BranchSearchResponse'
+        '304':
+          $ref: '#/components/responses/NotModified'
         '400':
           $ref: '#/components/responses/InvalidRequest'
         '404':
@@ -158,13 +192,22 @@ paths:
       operationId: getBranch
       summary: 銀行コードと支店コードで支店を取得する
       tags: [Branches]
+      parameters:
+        - $ref: '#/components/parameters/IfNoneMatch'
       responses:
         '200':
           description: 銀行と支店の情報
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlDefault'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/BranchResponse'
+        '304':
+          $ref: '#/components/responses/NotModified'
         '404':
           description: 銀行または支店が見つからない
           content:
@@ -265,7 +308,48 @@ components:
         type: string
         minLength: 1
       example: みずほ
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      description: |
+        直前に取得した `ETag` を指定すると、内容が変わっていない場合に
+        `304 Not Modified` を返します(bodyは返しません)。カンマ区切りの
+        複数validatorや `*` も受け付けます。
+      schema:
+        type: string
+      example: '"df4dc7f09a7c99ca5ffc9e25831db44e9af6c3ed8859a18159f9849589dd060e"'
+  headers:
+    ETag:
+      description: |
+        レスポンスbodyのcanonical JSON表現から生成したSHA-256の強いvalidatorです。
+        同じエンドポイント・同じクエリで内容が変わらない限り安定し、内容が
+        変われば必ず変化します。
+      schema:
+        type: string
+      example: '"df4dc7f09a7c99ca5ffc9e25831db44e9af6c3ed8859a18159f9849589dd060e"'
+    CacheControlMeta:
+      description: '`/api/meta` はrevision確認用途のため、他のGET APIより短いTTLです。'
+      schema:
+        type: string
+        const: public, max-age=60
+    CacheControlDefault:
+      description: 銀行・支店データ向けの標準TTLです。
+      schema:
+        type: string
+        const: public, max-age=300
   responses:
+    NotModified:
+      description: |
+        `If-None-Match` が現在の `ETag` と一致したため、bodyを省略します。
+        CORS関連headerは200レスポンスと同様に付与されます。
+      headers:
+        ETag:
+          $ref: '#/components/headers/ETag'
+        Cache-Control:
+          description: 200レスポンスと同じCache-Control値を返します。
+          schema:
+            type: string
     CorsPreflight:
       description: |
         `/api` 配下の公開read APIに対するCORS事前確認です。
