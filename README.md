@@ -344,7 +344,7 @@ docker build \
   -t zengin-pl-api:dev .
 ```
 
-`ZENGIN_PL_GIT_REF` は開発時の一時的な上書き用です。省略した場合は `zengin-pl.ref` の40文字commit SHAを使います。正式にbackendを更新するときは、`zengin-pl.ref` を新しい検証済みSHAへ変更し、通常のpull requestとしてテストします。
+`ZENGIN_PL_GIT_REF` は開発時の一時的な上書き用です。省略した場合は `zengin-pl.ref` の40文字commit SHAを使います。正式にbackendを更新するときは、`zengin-pl.ref` を新しい検証済みSHAへ変更し、通常のpull requestとしてテストします。この更新PRの作成は下記の[zengin-pl pinの自動追随](#zengin-pl-pinの自動追随)で自動化されています。
 
 Docker build 中の `zengin-pl` は、GitHub clone 後に `cpanm --installdeps` と `cpanm` で標準的に install しています。
 
@@ -379,6 +379,83 @@ export SLACK_SIGNING_SECRETS='personal-secret,work-secret'
 `SLACK_SIGNING_SECRETS` が無い場合は、後方互換のため `SLACK_SIGNING_SECRET` を使います。
 
 Slack の署名付き request は手で作りにくいため、まずは Slack App から実際に呼び出して確認するのが簡単です。
+
+## zengin-pl pinの自動追随
+
+[`zengin-pl`](https://github.com/sironekotoro/zengin-pl) の master が新しい検証済みcommitへ進んだら、
+[`.github/workflows/sync-zengin-pl.yml`](.github/workflows/sync-zengin-pl.yml) が `zengin-pl.ref` を
+追随させる更新PRを自動作成します。
+
+### 自動化されるもの・されないもの
+
+自動化されるのは **PR作成まで** です。
+
+- `zengin-pl` masterのHEADを定期的に確認する(30分間隔 + 手動実行)
+- そのSHAが実在し、`zengin-pl`のmaster履歴上にあり、Perl test matrixが全て成功していることを検証する
+- 検証済みなら `chore/update-zengin-pl` branchで `zengin-pl.ref` だけを更新し、更新PRを作成(既存PRがあれば内容を更新)する
+
+自動化されないもの:
+
+- **PRのmerge**。zengin-plの変更が本APIにとって意味的に問題ないか(例: 検索ロジック変更でAPIレスポンスが変わる等)は、
+  テストPASSだけでは判断できないため、人間が内容を確認してmergeします。
+- **Cloud Runへのdeploy**。上記PRが人間によって`main`へmergeされた後、既存の[`deploy.yml`](.github/workflows/deploy.yml)が
+  通常どおりPerl test・Docker build・OpenAPI検証・Schemathesis contract test・deployを実行します。この自動化自身は
+  一切deployしません。
+- `zengin-pl.ref` 以外のファイル(APIコード・OpenAPI・Dockerfile等)の変更。
+
+### なぜpull型(スケジュール実行)にしたか
+
+`zengin-pl`が更新のたびに`repository_dispatch`等でzengin-pl-apiを起動するpush型も検討しましたが、採用しませんでした。
+理由は以下のとおりです。
+
+- push型では、`zengin-pl`側にzengin-pl-apiへ書き込み可能な認証情報(fine-grained PATやGitHub App)を新たに
+  secretとして保管する必要があります。pull型ならzengin-pl-api自身の既定`GITHUB_TOKEN`だけで完結し、
+  **新しいsecretやGitHub Appの設定は一切不要**です。
+- push型は外部からのevent payload(`repository`や`sender`等)を受け取り、それを信頼してよいか検証する
+  責務が生まれます。pull型はそもそも外部payloadを受け取らないため、このリスクのカテゴリ自体が発生しません。
+- 書き込み権限がzengin-pl-api自身のrepositoryだけに閉じるため、監査しやすく、将来の変更もzengin-pl-api側だけで完結します。
+
+トレードオフは即時性です。`zengin-pl`のmaster更新から反映まで最大30分程度のずれがあります。今すぐ反映したい場合は
+`workflow_dispatch`で手動実行してください(後述)。
+
+### 必要なsecret / GitHub App設定
+
+**ありません。** `sync-zengin-pl.yml` は次の2つの権限だけを使います。
+
+- 読み取り: `zengin-pl`は公開repositoryのため、そのcommit/check-runs情報は認証なしで取得できます
+  (このworkflowでは既定の `GITHUB_TOKEN` を使い、匿名アクセスより高いrate limitの恩恵を受けています)
+- 書き込み: zengin-pl-api自身への書き込み(branch push・PR作成)は、このworkflowに宣言した既定の
+  `GITHUB_TOKEN` (`permissions: contents: write, pull-requests: write`)で完結します
+
+新しいPAT・GitHub App・repository secretの追加は不要です。
+
+### 重複PR対策
+
+固定branch `chore/update-zengin-pl` を再利用します(SHA単位のbranchは作りません)。新しい検証済みSHAが
+見つかるたびに、このbranchを`main`から作り直してforce pushし、開いているPRがあれば内容(diff・タイトル・本文)
+を更新するだけで、新しいPRは作りません。
+
+トレードオフ: 人間がこのPRをレビュー中に`zengin-pl`側がさらに更新されると、レビュー対象のdiffが
+書き換わります。頻繁なzengin-pl更新とレビュー期間が重なる場合は、レビューを終えてmergeするか、
+一旦レビューを止めてbranchの最新状態を確認してください。
+
+### 手動復旧方法
+
+自動実行が失敗した場合や、今すぐ反映したい場合は、GitHub Actionsの `Sync zengin-pl pin` workflowを
+`workflow_dispatch`で手動実行できます。
+
+- `sha` を省略: `zengin-pl` master HEADを使う(定期実行と同じ)
+- `sha` を指定: 特定のcommitをpinしたい場合に使う。**手動指定でも自動経路と全く同じ検証**
+  (40文字16進数の形式チェック、`zengin-pl`に実在するか、master履歴上にあるか、Perl test matrixが
+  全て成功しているか)を通過しない限り更新PRは作成されません。
+
+### 人間がmergeする理由
+
+`zengin-pl`のCIが成功していても、それがzengin-pl-apiにとって意味的に問題ないとは限りません
+(例: 検索の一致条件が変わり、既存クライアントの想定と異なる結果を返すようになる、等)。
+そのため、このrepositoryではbranch protectionやauto-mergeを設定せず、更新PRは常に人間が内容を
+確認してからmergeする運用にしています。mergeされた後は、既存の`deploy.yml`が通常どおりテスト・
+contract検証・Cloud Run deployを行います。
 
 ## デプロイ方針
 
