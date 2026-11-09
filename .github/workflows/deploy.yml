@@ -159,6 +159,12 @@ jobs:
             APP_GIT_SHA=${{ inputs.commit_sha || github.sha }}
             APP_BUILD_TIME=${{ env.APP_BUILD_TIME }}
 
+      - name: Verify deployed API revision
+        env:
+          SERVICE_URL: ${{ steps.deploy.outputs.url }}
+          EXPECTED_SHA: ${{ inputs.commit_sha || github.sha }}
+        run: bash bin/verify-deployment.sh "$SERVICE_URL" "$EXPECTED_SHA"
+
       - name: Show service URL
         run: |
           echo "Cloud Run URL: ${{ steps.deploy.outputs.url }}"
