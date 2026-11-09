@@ -408,7 +408,7 @@ Slack の署名付き request は手で作りにくいため、まずは Slack A
 
 1. 毎日 09:17 JST (00:17 UTC) に upstream の master を確認します。GitHub の schedule は遅延する場合があります。
 2. upstream の `actions.yml` の最新 run が、その SHA・master に対して成功し、`Perl 5.36` / `5.38` / `5.40` / `5.42` の4 jobがすべて成功した場合だけ更新PRを作ります。
-3. **PRのテスト開始は人間が行います。** `GITHUB_TOKEN` で作られたPRでは通常の `pull_request` CI が自動起動しないため、GitHub Actions の `test` → Run workflow で **branch `chore/update-zengin-pl`** を選んで実行してください。承認待ちのrunが表示される場合は、そのrunを確認して承認してください。`main` 上のテスト成功は更新PRの検証として使いません。
+3. **PRのテスト開始は人間が承認します。** 更新PRの最新headと変更内容を確認し、承認待ちのCI runを承認してください。承認するrunが見当たらない場合は、自動mergeを進めずActionsの状態を確認します。`main` 上のテスト成功は更新PRの検証として使いません。
 4. 最新のPR head SHAに対する `test.yml` の最新runで `test` と `docker` が両方成功した場合に限り、bot専用のpin更新PRを自動mergeします。CIが無い、途中、失敗、skip、必要job不足、APIエラーの場合はmergeしません。
 5. merge API が成功とmerge commit SHAを返した場合だけ、同じworkflowから再利用可能な `deploy.yml` を呼び出します。`GITHUB_TOKEN` によるmergeでは通常のpush workflowが起動しないため、pushイベントに依存しません。
 
@@ -430,7 +430,7 @@ Slack の署名付き request は手で作りにくいため、まずは Slack A
 ### 手動復旧と確認
 
 - 同期を急ぐ場合: `Sync zengin-pl pin` をmainで手動実行します。任意のupstream SHAを指定しても同じ検証が必要です。
-- PRのCI待ち: `test` を `chore/update-zengin-pl` で手動実行します。
+- PRのCI待ち: 更新PRの最新headに対する承認待ちrunを確認し、手動承認します。runが無い場合は止めて原因を調べます。
 - CI成功後の再判定: `Auto-merge zengin-pl pin` をmainで手動実行します。
 - merge成功後にdeployだけ失敗した場合: mainの先端を確認し、`deploy` をmainで手動実行します。既にmerge済みのPRは再mergeしません。
 - deployの成功はActionsのdeploy jobと `/api/meta` の `APP_GIT_SHA` で確認します。merge成功だけではdeploy完了とはみなしません。
