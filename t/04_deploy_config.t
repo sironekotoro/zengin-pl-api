@@ -32,5 +32,7 @@ like($ignore, qr/^gha-creds-\*\.json$/m, 'root cloud credentials excluded from D
 like($ignore, qr/^\*\*\/gha-creds-\*\.json$/m, 'nested cloud credentials excluded from Docker context');
 like($workflow, qr/commit_sha:/, 'reusable deployment accepts an explicit commit SHA');
 like($workflow, qr/group: deploy-production/, 'deployment paths share one concurrency group');
+like($workflow, qr/run: bash bin\/verify-deployment\.sh "\$SERVICE_URL" "\$EXPECTED_SHA"/,
+    'deploy job must run post-rollout SHA verification');
 done_testing;
 
