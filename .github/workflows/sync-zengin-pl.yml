@@ -30,7 +30,7 @@ on:
 
 # 複数run(定期実行と手動実行など)が同時にbranchへ書き込むのを避ける。
 # cancel-in-progressはfalseにして、実行中のgit push/PR操作を途中で
-# 打ち切らせない(キューイングして直列化する)。
+# 打ち切らせない。ただしpending runは新しいrunに置き換えられ得る。
 concurrency:
   group: sync-zengin-pl
   cancel-in-progress: false
