@@ -38,8 +38,8 @@ jobs:
 
       - name: Validate zengin-pl revision pin
         run: |
-          test "$(wc -l < zengin-pl.ref)" -eq 1
-          grep -Eq '^[0-9a-f]{40}$' zengin-pl.ref
+          source bin/lib/zengin-pl-verify.sh
+          read_pin_file zengin-pl.ref >/dev/null
 
       - name: Validate OpenAPI document
         run: |
@@ -88,3 +88,4 @@ jobs:
         if: always()
         run: |
           docker rm -f zengin-pl-api-test || true
+
