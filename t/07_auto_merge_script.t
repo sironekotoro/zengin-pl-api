@@ -135,6 +135,14 @@ subtest 'main(): full scenarios via a scripted gh mock' => sub {
         is($r->{output}, 'merged_sha=' . ('a' x 40) . "\n", 'confirmed merge SHA is published to downstream job');
     };
 
+    subtest 'main requires approval of the exact current head' => sub {
+        my $r = _run_main(pr_list=>'[{"number":11}]', pr_view=>$base_pr_view, pr_diff=>$VALID_DIFF,
+            approved_head_sha=>'c' x 40);
+        is($r->{exit},1,'stale approval fails closed');
+        like($r->{out},qr/explicit owner approval for this PR and head SHA is required/,'approval gate reached');
+        unlike($r->{log},qr/MERGE_CALLED/,'cannot merge with stale approval');
+    };
+
     for my $result ('{"merged":false,"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}', '{"merged":true}', '{"merged":true,"sha":"bad"}', 'not json', '') {
         my $r = _run_main(pr_list=>'[{"number":11}]', pr_view=>$base_pr_view, pr_diff=>$VALID_DIFF,
             zengin_pl_checkruns=>_checkruns_json(['Perl 5.36','Perl 5.38','Perl 5.40','Perl 5.42']),
@@ -371,6 +379,9 @@ sub _run_main {
     close $log_fh;
     my ($output_fh, $output_file) = tempfile();
     close $output_fh;
+    my ($event_fh, $event_file) = tempfile();
+    print {$event_fh} JSON::PP->new->encode({sender=>{login=>'sironekotoro',type=>'User'}, inputs=>{pr_number=>'11',head_sha=>($args{approved_head_sha}//$HEAD_SHA)}});
+    close $event_fh;
 
     my $override_is_ancestor      = $args{override_is_ancestor}      // 'return 0';
     my $override_current_head_sha = $args{override_current_head_sha};
@@ -391,10 +402,11 @@ sub _run_main {
     # $overridesが1行に溶接されて構文エラーになる。シェルへ渡す文字列は
     # 必ず_shell_single_quote()(単一引用符での正しいエスケープ)を使う。
     my $cmd = sprintf(
-        'PATH=%s:$PATH GH_CALL_LOG=%s GITHUB_OUTPUT=%s bash -c %s',
+        'PATH=%s:$PATH GH_CALL_LOG=%s GITHUB_OUTPUT=%s GITHUB_EVENT_PATH=%s GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/main GITHUB_ACTOR=sironekotoro GITHUB_TRIGGERING_ACTOR=sironekotoro bash -c %s',
         _shell_single_quote($mock_dir),
         _shell_single_quote($log_file),
         _shell_single_quote($output_file),
+        _shell_single_quote($event_file),
         _shell_single_quote("source '$script' >/dev/null 2>&1; $overrides main"),
     );
 
