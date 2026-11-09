@@ -18,6 +18,15 @@ validate_sha_format() {
     [[ "$sha" =~ $ZENGIN_PL_SHA_RE ]]
 }
 
+# Preserve exact bytes: command substitution would otherwise hide extra LFs.
+read_pin_file() {
+    perl -0777 -e '
+        my $bytes = <> // q{};
+        $bytes =~ /\A([0-9a-f]{40})\n\z/ or exit 1;
+        print $1;
+    ' -- "$1"
+}
+
 short_sha() {
     local sha="$1"
     printf '%s' "${sha:0:12}"
