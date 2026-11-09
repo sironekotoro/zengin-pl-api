@@ -22,7 +22,10 @@ validate_sha_format() {
 read_pin_file() {
     perl -0777 -e '
         my $bytes = <> // q{};
-        $bytes =~ /\A([0-9a-f]{40})\n\z/ or exit 1;
+        $bytes =~ /\A([0-9a-f]{40})\n\z/ or do {
+            warn qq{pin must be exactly 40 lowercase hex characters followed by one LF (41 bytes); got } . length($bytes) . qq{ bytes\n};
+            exit 1;
+        };
         print $1;
     ' -- "$1"
 }
