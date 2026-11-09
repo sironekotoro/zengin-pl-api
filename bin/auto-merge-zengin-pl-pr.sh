@@ -123,23 +123,9 @@ review_threads_all_resolved() {
     [[ "$unresolved" -eq 0 ]]
 }
 
-# zengin-pl-apiリポジトリ自身のPR head SHAに対するcheck-runsが、
-# 1件以上存在し、かつ全て成功していることを確認する。
-# (該当check-runsが無い場合も「未検証」として失敗扱いにする)
+# Both required jobs must succeed in the latest test.yml run on the exact head.
 api_ci_all_success() {
-    local sha="$1"
-    local runs count not_success
-
-    runs="$(gh api "repos/${API_REPO}/commits/${sha}/check-runs" --jq '.check_runs')"
-    count="$(jq 'length' <<<"$runs")"
-
-    if [[ "$count" -eq 0 ]]; then
-        echo "::warning::no check-runs found for ${API_REPO}@${sha}" >&2
-        return 1
-    fi
-
-    not_success="$(jq '[.[] | select(.status != "completed" or .conclusion != "success")] | length' <<<"$runs")"
-    [[ "$not_success" -eq 0 ]]
+    workflow_ci_success "$API_REPO" test.yml "$REQUIRED_HEAD_BRANCH" "$1" '["test", "docker"]'
 }
 
 # `sha`を渡すことで、呼び出し直前に再取得したhead SHAと実際に一致する
@@ -234,9 +220,17 @@ main() {
     fi
 
     echo "All conditions satisfied; merging PR #${pr_number} (head ${head_sha})"
-    merge_pr "$pr_number" "$head_sha"
+    local result merged_sha
+    result="$(merge_pr "$pr_number" "$head_sha")"
+    jq -e '.merged == true' <<<"$result" >/dev/null || reject_hard "merge API did not confirm a merge"
+    merged_sha="$(jq -er '.sha' <<<"$result")"
+    validate_sha_format "$merged_sha" || reject_hard "merge API returned an invalid SHA"
+    if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+        printf 'merged_sha=%s\n' "$merged_sha" >> "$GITHUB_OUTPUT"
+    fi
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi
+
