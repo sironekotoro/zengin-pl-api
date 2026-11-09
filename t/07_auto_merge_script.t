@@ -100,7 +100,7 @@ subtest 'main(): full scenarios via a scripted gh mock' => sub {
             pr_list  => '[{"number":11}]',
             pr_view  => $base_pr_view,
             pr_diff  => $VALID_DIFF,
-            zengin_pl_checkruns => _checkruns_json(['Perl 5.36', 'Perl 5.42']),
+            zengin_pl_checkruns => _checkruns_json(['Perl 5.36', 'Perl 5.38', 'Perl 5.40', 'Perl 5.42']),
             api_checkruns       => _checkruns_json(['test', 'docker']),
             graphql  => _threads_json([]),
         );
@@ -160,7 +160,7 @@ subtest 'main(): full scenarios via a scripted gh mock' => sub {
             pr_list => '[{"number":11}]',
             pr_view => $base_pr_view,
             pr_diff => $VALID_DIFF,
-            zengin_pl_checkruns => _checkruns_json(['Perl 5.36']),
+            zengin_pl_checkruns => _checkruns_json(['Perl 5.36', 'Perl 5.38', 'Perl 5.40', 'Perl 5.42']),
             override_is_ancestor => 'return 1',
         );
         is($r->{exit}, 1, 'exits 1 (re-verification failed)');
@@ -182,7 +182,7 @@ subtest 'main(): full scenarios via a scripted gh mock' => sub {
             pr_list => '[{"number":11}]',
             pr_view => $base_pr_view,
             pr_diff => $VALID_DIFF,
-            zengin_pl_checkruns => _checkruns_json(['Perl 5.36']),
+            zengin_pl_checkruns => _checkruns_json(['Perl 5.36', 'Perl 5.38', 'Perl 5.40', 'Perl 5.42']),
             api_checkruns       => _checkruns_json_with([{ name => 'test', status => 'in_progress', conclusion => JSON_NULL() }]),
         );
         is($r->{exit}, 0, 'exits 0 (transient, not structurally broken)');
@@ -194,7 +194,7 @@ subtest 'main(): full scenarios via a scripted gh mock' => sub {
             pr_list => '[{"number":11}]',
             pr_view => $base_pr_view,
             pr_diff => $VALID_DIFF,
-            zengin_pl_checkruns => _checkruns_json(['Perl 5.36']),
+            zengin_pl_checkruns => _checkruns_json(['Perl 5.36', 'Perl 5.38', 'Perl 5.40', 'Perl 5.42']),
             api_checkruns       => _checkruns_json([]),
         );
         is($r->{exit}, 0, 'exits 0');
@@ -226,7 +226,7 @@ subtest 'main(): full scenarios via a scripted gh mock' => sub {
             pr_list => '[{"number":11}]',
             pr_view => $base_pr_view,
             pr_diff => $VALID_DIFF,
-            zengin_pl_checkruns => _checkruns_json(['Perl 5.36']),
+            zengin_pl_checkruns => _checkruns_json(['Perl 5.36', 'Perl 5.38', 'Perl 5.40', 'Perl 5.42']),
             api_checkruns       => _checkruns_json(['test', 'docker']),
             graphql             => _threads_json([0]),
         );
@@ -239,7 +239,7 @@ subtest 'main(): full scenarios via a scripted gh mock' => sub {
             pr_list  => '[{"number":11}]',
             pr_view  => $base_pr_view,
             pr_diff  => $VALID_DIFF,
-            zengin_pl_checkruns => _checkruns_json(['Perl 5.36']),
+            zengin_pl_checkruns => _checkruns_json(['Perl 5.36', 'Perl 5.38', 'Perl 5.40', 'Perl 5.42']),
             api_checkruns       => _checkruns_json(['test', 'docker']),
             graphql             => _threads_json([]),
             override_current_head_sha => 'echo "a-different-sha-than-before-0000000001"',
@@ -384,6 +384,22 @@ MOCK_HEADER
     print {$fh} "PR_DIFF_FILE=" . _shell_single_quote($pr_diff_file) . "\n";
 
     print {$fh} <<'MOCK_BODY';
+for arg in "$@"; do
+  if [[ "$arg" == repos/*/actions/* ]]; then
+    if [[ "$arg" == *zengin-pl-api/* ]]; then
+      fixture="$API_CHECKRUNS_JSON"; branch=chore/update-zengin-pl
+    else
+      fixture="$ZENGINPL_CHECKRUNS_JSON"; branch=master
+    fi
+    if [[ "$arg" == */workflows/* ]]; then
+      sha="${arg#*head_sha=}"; sha="${sha%%&*}"
+      jq -n --arg sha "$sha" --arg branch "$branch" '[{workflow_runs:[{id:123,run_attempt:1,head_sha:$sha,head_branch:$branch,event:"workflow_dispatch",status:"completed",conclusion:"success"}]}]'
+    else
+      jq '[{jobs:.check_runs}]' <<<"$fixture"
+    fi
+    exit 0
+  fi
+done
 if [[ "$1" == "pr" && "$2" == "view" ]]; then
   json="$PR_VIEW_JSON"
 elif [[ "$1" == "pr" && "$2" == "diff" ]]; then
@@ -398,6 +414,7 @@ elif [[ "$1" == "api" && "$2" == *"zengin-pl-api/commits/"*"/check-runs" ]]; the
   json="$API_CHECKRUNS_JSON"
 elif [[ "$1" == "api" && "$2" == "--method" ]]; then
   echo "MERGE_CALLED $*" >> "$GH_CALL_LOG"
+  echo '{"merged":true,"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
   exit 0
 else
   echo "unhandled mock gh call: $*" >&2
@@ -422,3 +439,4 @@ sub _shell_single_quote {
     $str =~ s/'/'\\''/g;
     return "'" . $str . "'";
 }
+
