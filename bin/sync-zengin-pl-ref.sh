@@ -75,15 +75,16 @@ zengin-pl側のmaster branch上で存在が確認され、Perl test matrixが
 成功したcommitのみをpinしています。このPRの内容は \`${ZENGIN_PL_REF_FILE}\`
 の1行だけです。
 
-PRのCI開始は手動承認が必要です。最新headの承認待ちrunを確認してください。
+CIが成功してもmergeは始まりません。ownerがActionsの Auto-merge zengin-pl pin を
+mainで手動実行し、このPR番号と最新head SHAを入力して明示的に承認してください。
 botがmergeした場合は、同じworkflowから deploy workflow (\`.github/workflows/deploy.yml\`)
 を確認済みmerge SHAで明示的に呼び出します。merge成功だけではdeploy完了とは限りません。
 
 このPRは条件を満たせば[auto-merge-zengin-pl.yml](.github/workflows/auto-merge-zengin-pl.yml)
-により自動でmergeされます(author・branch・変更ファイル・diff形状・
+のowner承認付き手動実行によりmergeされます(author・branch・変更ファイル・diff形状・
 zengin-pl/zengin-pl-api双方のCI結果などを再検証したうえで、全て満たした
 場合のみ)。条件を満たさない場合はopenのまま残ります。失敗理由を確認し、
-必要に応じてbranchを最新mainから更新して、新しいCIを手動承認してください。
+必要に応じてbranchを最新mainから更新して、新しいCI成功後に最新head SHAで改めてmergeを承認してください。
 EOF
 }
 
