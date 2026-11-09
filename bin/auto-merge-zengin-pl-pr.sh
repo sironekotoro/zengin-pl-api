@@ -5,7 +5,7 @@
 #
 # 設計上の要点:
 #   - sync workflow内でPR作成直後にmergeしない。API側CI完了後に別workflow
-#     (auto-merge-zengin-pl.yml, workflow_run トリガ)からこのscriptを呼ぶ。
+#     (auto-merge-zengin-pl.yml, ownerの明示的workflow_dispatch)から呼ぶ。
 #   - PR作成時に一度検証済みでも、branchが書き換えられている可能性を排除
 #     するため、ここで全条件を再取得・再検証する(何も信用して使い回さない)。
 #   - 条件を1つでも満たさなければmergeしない。「わからないので進める」は
@@ -55,6 +55,21 @@ parse_pin_diff() {
     printf '%s %s\n' "$old_line" "$new_line"
 }
 
+# The repository owner can approve their own operational action through Actions,
+# unlike a self-review on a PR. No stored label/comment or old CI run grants approval.
+manual_merge_approved() {
+    local pr_number="$1" head_sha="$2"
+    [[ "${GITHUB_EVENT_NAME:-}" == workflow_dispatch ]] || return 1
+    [[ "${GITHUB_REF:-}" == refs/heads/main ]] || return 1
+    [[ "${GITHUB_ACTOR:-}" == sironekotoro ]] || return 1
+    [[ "${GITHUB_TRIGGERING_ACTOR:-}" == sironekotoro ]] || return 1
+    [[ -n "${GITHUB_EVENT_PATH:-}" && -f "$GITHUB_EVENT_PATH" ]] || return 1
+    jq -e --arg pr "$pr_number" --arg sha "$head_sha" '
+        .sender.login == "sironekotoro" and .sender.type == "User" and
+        .inputs.pr_number == $pr and .inputs.head_sha == $sha
+    ' "$GITHUB_EVENT_PATH" >/dev/null
+}
+
 no_blocking_reviews() {
     local reviews_json="$1"
     jq -e '
@@ -95,7 +110,7 @@ pin_at_sha() {
     json="$(gh api "repos/${API_REPO}/contents/${REQUIRED_REF_FILE}?ref=${sha}")" || return 1
     jq -e --arg path "$REQUIRED_REF_FILE" '
         .type == "file" and .path == $path and .encoding == "base64" and .size == 41
-    ' <<<"$json" >/dev/null || return 1
+    ' <<<"$json" >/dev/null || { echo "pin at ${sha} must be a regular 41-byte base64-encoded file" >&2; return 1; }
     jq -er '.content' <<<"$json" | base64 --decode | perl -0777 -e '
         my $bytes = <STDIN> // q{};
         $bytes =~ /\A([0-9a-f]{40})\n\z/ or exit 1; print $1;
@@ -162,7 +177,7 @@ main() {
     echo "Evaluating PR #${pr_number}"
 
     reject_soft() {
-        echo "::notice::not auto-merging PR #${pr_number} (will retry later): $1"
+        echo "::notice::not auto-merging PR #${pr_number} (requires a new owner dispatch after resolution): $1"
         exit 0
     }
     reject_hard() {
@@ -190,6 +205,7 @@ main() {
     [[ "$is_draft" == "false" ]] || reject_hard "PR is a draft"
     jq -e '.isCrossRepository == false' <<<"$snapshot" >/dev/null || reject_hard "cross-repository or unknown PR origin"
     validate_sha_format "$head_sha" && validate_sha_format "$base_sha" || reject_hard "invalid head/base SHA"
+    manual_merge_approved "$pr_number" "$head_sha" || reject_hard "explicit owner approval for this PR and head SHA is required"
     local latest_base_sha
     latest_base_sha="$(current_base_sha)" || reject_soft "could not read current base SHA"
     [[ "$latest_base_sha" == "$base_sha" ]] || reject_soft "base branch changed since snapshot"
