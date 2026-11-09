@@ -67,13 +67,8 @@ jobs:
 
       - name: Resolve zengin-pl revision
         run: |
-          ZENGIN_PL_GIT_REF="$(cat zengin-pl.ref)"
-
-          if [ "$(wc -l < zengin-pl.ref)" -ne 1 ] || \
-            ! printf '%s' "$ZENGIN_PL_GIT_REF" | grep -Eq '^[0-9a-f]{40}$'; then
-            echo "zengin-pl.ref must contain exactly one 40-character commit SHA" >&2
-            exit 1
-          fi
+          source bin/lib/zengin-pl-verify.sh
+          ZENGIN_PL_GIT_REF="$(read_pin_file zengin-pl.ref)"
 
           echo "Using zengin-pl revision: $ZENGIN_PL_GIT_REF"
           echo "ZENGIN_PL_GIT_REF=$ZENGIN_PL_GIT_REF" >> "$GITHUB_ENV"
