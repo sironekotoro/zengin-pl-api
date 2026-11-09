@@ -62,20 +62,20 @@ subtest 'pr_body includes old/new SHA and the source run URL' => sub {
 
 subtest 'write_ref_if_changed detects no-op vs. real changes' => sub {
     my ($fh, $ref_file) = tempfile();
-    print {$fh} "oldsha0000000000000000000000000000000001\n";
+    print {$fh} "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n";
     close $fh;
 
     ok(
-        !_source_and_run("write_ref_if_changed '$ref_file' 'oldsha0000000000000000000000000000000001'"),
+        !_source_and_run("write_ref_if_changed '$ref_file' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"),
         'the same SHA is reported as a no-op (non-zero exit)',
     );
-    is(_slurp($ref_file), "oldsha0000000000000000000000000000000001\n", 'the file is left untouched');
+    is(_slurp($ref_file), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", 'the file is left untouched');
 
     ok(
-        _source_and_run("write_ref_if_changed '$ref_file' 'newsha0000000000000000000000000000000002'"),
+        _source_and_run("write_ref_if_changed '$ref_file' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'"),
         'a different SHA is reported as a change (zero exit)',
     );
-    is(_slurp($ref_file), "newsha0000000000000000000000000000000002\n", 'the file is rewritten to exactly one line');
+    is(_slurp($ref_file), "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", 'the file is rewritten to exactly one line');
 };
 
 subtest 'commit_exists / is_ancestor_of_master use real git against a local fixture' => sub {
