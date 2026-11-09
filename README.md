@@ -417,13 +417,13 @@ Slack の署名付き request は手で作りにくいため、まずは Slack A
 ### 安全条件
 
 - `app/github-actions` 作成の `chore/update-zengin-pl` → `main` の非draft PRだけを対象とします。
-- 変更は `zengin-pl.ref` 1ファイルの40桁小文字SHAの1行置換だけに限定します。
+- 変更は `zengin-pl.ref` 1ファイルの40桁小文字SHAの1行置換だけに限定します。diffの全行を検査し、固定base/head commitから取得したファイルの実バイトが「40桁小文字SHA + LF」の41バイトであることも検査します。空行、CRLF、改行欠落、mode変更などは拒否します。
 - upstream SHAの実在とmaster祖先関係、および上記4種類のPerl jobをmerge直前にも再確認します。
 - CIはworkflowファイル名、branch、head SHAで絞り込み、最新runの最新attemptのjobを全ページ取得して検証します。過去の成功runや他workflowの成功では代用しません。
-- 変更要求review、未解決thread、merge conflictがある場合は止まります。
-- PR headをmerge直前に再取得し、merge APIにも検証済みhead SHAを渡します。
+- 変更要求review、未解決thread、merge conflictがある場合は止まります。review threadは全ページ取得し、取得エラーや欠落時も止まります。
+- PR headが検証開始時のmain先端を含むことを確認します。PR headとmain先端をmerge直前に再取得し、merge APIにも検証済みhead SHAを渡します。mainが進んだ場合は止め、branch更新と新しいCIの手動承認が必要です。GitHubのmerge APIにはbase SHAの条件指定がないため、最終確認直後のmain更新までatomicに防げるわけではありません。branch protectionやmerge queueの設定は今回変更していません。
 - 自動mergeの判定コードはmainから取得し、PRのコードは実行しません。
-- deployはmainからのみ実行し、確認されたmerge SHAをcheckoutします。開始時と公開直前、Cloud Run更新直前にmainの先端と一致することを検証し、古いcommitのdeployを抑制します。ただしGitHubとCloud Runをまたぐ判定はatomicではなく、確認直後のmain更新を完全には防げません。deploy全体は共通concurrency groupで直列化します。
+- deployはmainからのみ実行し、確認されたmerge SHAをcheckoutします。開始時と公開直前、Cloud Run更新直前にmainの先端と一致することを検証し、古いcommitのdeployを抑制します。ただしGitHubとCloud Runをまたぐ判定はatomicではなく、確認直後のmain更新を完全には防げません。deploy全体は共通concurrency groupで同時実行を避けます。ただしGitHub ActionsのconcurrencyはFIFOキューではなく、新しいrunが既存のpending runを置き換える場合があります。すべての中間commitのdeployは保証せず、最新mainのdeploy結果を確認します。
 
 `workflow_run` が通常の再評価経路です。レビュー解除などの再評価用に15分間隔のscheduleも残します。scheduleはCIの手動開始を代行しません。GitHubの遅延により時刻は保証されません。
 
@@ -432,7 +432,7 @@ Slack の署名付き request は手で作りにくいため、まずは Slack A
 - 同期を急ぐ場合: `Sync zengin-pl pin` をmainで手動実行します。任意のupstream SHAを指定しても同じ検証が必要です。
 - PRのCI待ち: 更新PRの最新headに対する承認待ちrunを確認し、手動承認します。runが無い場合は止めて原因を調べます。
 - CI成功後の再判定: `Auto-merge zengin-pl pin` をmainで手動実行します。
-- merge成功後にdeployだけ失敗した場合: mainの先端を確認し、`deploy` をmainで手動実行します。既にmerge済みのPRは再mergeしません。
+- merge成功後にdeployが失敗・未起動の場合: GitHubのPR状態とmain先端、Actionsのdeploy結果を先に確認し、必要なら `deploy` をmainで手動実行します。既にmerge済みのPRは再mergeしません。auto-merge jobの再実行では、open PRが無いためmerge SHA出力が復元されずdeployも起動しません。「Re-run failed jobs」で元の出力を利用できる場合と、workflow全体の再実行は区別してください。通信切断などでmerge結果が不明な場合も、先にGitHubで実際の結果を確認します。
 - deployの成功はActionsのdeploy jobと `/api/meta` の `APP_GIT_SHA` で確認します。merge成功だけではdeploy完了とはみなしません。
 
 `merge_method=merge` を使用します。GitHub Native Auto-mergeやbranch protectionの設定は変更しません。必要なjob名を変更する場合は `bin/lib/zengin-pl-verify.sh` と `bin/auto-merge-zengin-pl-pr.sh` の期待値も同時にレビューして変更してください。
