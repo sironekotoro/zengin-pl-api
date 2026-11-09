@@ -408,11 +408,15 @@ Slack の署名付き request は手で作りにくいため、まずは Slack A
 
 1. 毎日 09:17 JST (00:17 UTC) に upstream の master を確認します。GitHub の schedule は遅延する場合があります。
 2. upstream の `actions.yml` の最新 run が、その SHA・master に対して成功し、`Perl 5.36` / `5.38` / `5.40` / `5.42` の4 jobがすべて成功した場合だけ更新PRを作ります。
-3. **PRのテスト開始は人間が承認します。** 更新PRの最新headと変更内容を確認し、承認待ちのCI runを承認してください。承認するrunが見当たらない場合は、自動mergeを進めずActionsの状態を確認します。`main` 上のテスト成功は更新PRの検証として使いません。
-4. 最新のPR head SHAに対する `test.yml` の最新runで `test` と `docker` が両方成功した場合に限り、bot専用のpin更新PRを自動mergeします。CIが無い、途中、失敗、skip、必要job不足、APIエラーの場合はmergeしません。
-5. merge API が成功とmerge commit SHAを返した場合だけ、同じworkflowから再利用可能な `deploy.yml` を呼び出します。`GITHUB_TOKEN` によるmergeでは通常のpush workflowが起動しないため、pushイベントに依存しません。
+3. PRの最新headで `test` と `docker` が成功するまで待ちます。CIはGitHubの起動条件によって自動開始または承認待ちになります。承認待ちなら確認して開始してください。runが無い場合は `test` を対象branchで手動実行できます。**CIの開始・成功はmerge承認ではありません。**
+4. owner `sironekotoro` がPR内容と最新head SHAを確認し、Actions → **Auto-merge zengin-pl pin** → **Run workflow** でbranch **main** を選び、`pr_number` と40桁の `head_sha` を入力します。この操作が、そのPR・SHAのmergeと、その後の検証付きdeployの明示的な承認です。PR番号はGitHubのPR画面、head SHAはPRの最新commitから確認します。upstreamの `zengin-pl.ref` の値とは別です。
+5. workflowは実行者と再実行者が両方ownerであること、mainからの手動実行であること、入力PR番号・SHAが現在の対象PRと一致することを確認し、全安全条件を再検査します。merge APIが成功とmerge SHAを返した場合だけ再利用可能な `deploy.yml` を呼び出します。
 
-新しいPAT、GitHub App、secretは追加しません。PR headが更新された場合は、最新headに対して再びテストを開始してください。CIの手動実行はPRレビューの承認とは別です。一般のPRや人間作成PRは自動mergeの対象外です。
+`workflow_run` とscheduleからのmerge起動はありません。CI成功だけ、ラベルやコメントだけ、PRレビューだけではmergeしません。所有者自身のPRを自分でApproveできないGitHubの制約に依存せず、ownerによるActionsの明示操作を使います。新しいPAT、GitHub App、secret、environment保護設定は追加しません。owner以外の手動実行・再実行は拒否します。GitHubが提供するのは認証済み実行者の情報で、画面を操作した物理的な人間の証明ではありません。ownerの認証情報でAPIからdispatchする自動処理を別途作れば同じ実行者として扱われるため、そのような無人dispatchはこの運用に追加しないでください。
+
+CI途中や失敗、PR head/base更新などで止まった場合は、問題を解消してCI成功を確認した後、最新PR番号・SHAで改めて実行してください。承認を将来の別SHAへ持ち越しません。ownerによる同じdispatchの再実行は同じPR/SHAへの再試行となり、その時点の安全条件を再確認します。一般のPRや人間作成PRは対象外です。
+
+この方式は既存のrepository ownerとActionsの手動実行機能を利用します。実際に承認を送ってmerge/deployまで動かす検証は、別途承認された本番試行で行います。Run workflowが利用できない場合は権限・Actionsの状態を確認して止め、別方式へ勝手に切り替えません。
 
 ### 安全条件
 
@@ -421,19 +425,20 @@ Slack の署名付き request は手で作りにくいため、まずは Slack A
 - upstream SHAの実在とmaster祖先関係、および上記4種類のPerl jobをmerge直前にも再確認します。
 - CIはworkflowファイル名、branch、head SHAで絞り込み、最新runの最新attemptのjobを全ページ取得して検証します。過去の成功runや他workflowの成功では代用しません。
 - 変更要求review、未解決thread、merge conflictがある場合は止まります。review threadは全ページ取得し、取得エラーや欠落時も止まります。
-- PR headが検証開始時のmain先端を含むことを確認します。PR headとmain先端をmerge直前に再取得し、merge APIにも検証済みhead SHAを渡します。mainが進んだ場合は止め、branch更新と新しいCIの手動承認が必要です。GitHubのmerge APIにはbase SHAの条件指定がないため、最終確認直後のmain更新までatomicに防げるわけではありません。branch protectionやmerge queueの設定は今回変更していません。
+- PR headが検証開始時のmain先端を含むことを確認します。PR headとmain先端をmerge直前に再取得し、merge APIにも検証済みhead SHAを渡します。mainが進んだ場合は止め、branch更新・新しいCI成功・最新SHAへの明示的なmerge承認が必要です。GitHubのmerge APIにはbase SHAの条件指定がないため、最終確認直後のmain更新までatomicに防げるわけではありません。branch protectionやmerge queueの設定は今回変更していません。
 - 自動mergeの判定コードはmainから取得し、PRのコードは実行しません。
 - deployはmainからのみ実行し、確認されたmerge SHAをcheckoutします。開始時と公開直前、Cloud Run更新直前にmainの先端と一致することを検証し、古いcommitのdeployを抑制します。ただしGitHubとCloud Runをまたぐ判定はatomicではなく、確認直後のmain更新を完全には防げません。deploy全体は共通concurrency groupで同時実行を避けます。ただしGitHub ActionsのconcurrencyはFIFOキューではなく、新しいrunが既存のpending runを置き換える場合があります。すべての中間commitのdeployは保証せず、最新mainのdeploy結果を確認します。
-
-`workflow_run` が通常の再評価経路です。レビュー解除などの再評価用に15分間隔のscheduleも残します。scheduleはCIの手動開始を代行しません。GitHubの遅延により時刻は保証されません。
 
 ### 手動復旧と確認
 
 - 同期を急ぐ場合: `Sync zengin-pl pin` をmainで手動実行します。任意のupstream SHAを指定しても同じ検証が必要です。
-- PRのCI待ち: 更新PRの最新headに対する承認待ちrunを確認し、手動承認します。runが無い場合は止めて原因を調べます。
-- CI成功後の再判定: `Auto-merge zengin-pl pin` をmainで手動実行します。
+- PRのCI待ち: 最新headのrunを確認します。承認待ちなら開始を承認し、runが無ければ原因を確認して `test` を対象branchで手動実行します。これはmergeの承認ではありません。
+- CI成功後の承認・再判定: ownerが `Auto-merge zengin-pl pin` をmainで、対象PR番号と最新head SHAを指定して手動実行します。
 - merge成功後にdeployが失敗・未起動の場合: GitHubのPR状態とmain先端、Actionsのdeploy結果を先に確認し、必要なら `deploy` をmainで手動実行します。既にmerge済みのPRは再mergeしません。auto-merge jobの再実行では、open PRが無いためmerge SHA出力が復元されずdeployも起動しません。「Re-run failed jobs」で元の出力を利用できる場合と、workflow全体の再実行は区別してください。通信切断などでmerge結果が不明な場合も、先にGitHubで実際の結果を確認します。
-- deployの成功はActionsのdeploy jobと `/api/meta` の `APP_GIT_SHA` で確認します。merge成功だけではdeploy完了とはみなしません。
+- deploy後は `/api/meta` の **`api.git_sha`** が期待するmerge SHAに一致するかを自動検証します。`APP_GIT_SHA` は環境変数名で、JSONのfield名ではありません。
+- rolloutやキャッシュを考慮し、毎回異なるqueryとno-cache/no-store headerで問い合わせ、2回連続の一致を要求します。最大12回、各request最大15秒、間隔5秒で、既定の待ち時間は最大約235秒（処理時間を除く）です。一時的なHTTP失敗・古いSHA・欠落/不正JSONも上限内で再試行します。
+- 上限まで一致しなければdeploy jobを失敗にします。Cloud Runの変更自体は既に行われている可能性があるため、自動rollbackはせず、traffic・revision・実際の応答を確認します。2回の一致は全クライアントや全trafficの一致を保証するものではありません。merge成功だけではdeploy完了とはみなしません。
+- pin異常時は「40桁小文字hex + LFの41バイト」という要件と受信バイト数を診断に出します。自動補正せず、空行・CRLF・欠落改行などを確認して修正し、CIをやり直してください。
 
 `merge_method=merge` を使用します。GitHub Native Auto-mergeやbranch protectionの設定は変更しません。必要なjob名を変更する場合は `bin/lib/zengin-pl-verify.sh` と `bin/auto-merge-zengin-pl-pr.sh` の期待値も同時にレビューして変更してください。
 
