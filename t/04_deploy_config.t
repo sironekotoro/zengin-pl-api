@@ -20,4 +20,13 @@ like(
     'deploy action applies the service-level maximum instance count',
 );
 
+ok(index($workflow, 'name: Build image') < index($workflow, '- id: auth'),
+    'cloud credentials are created only after Docker build');
+open my $ignore_fh, '<', '.dockerignore' or die $!;
+my $ignore = do { local $/; <$ignore_fh> };
+like($ignore, qr/^gha-creds-\*\.json$/m, 'root cloud credentials excluded from Docker context');
+like($ignore, qr/^\*\*\/gha-creds-\*\.json$/m, 'nested cloud credentials excluded from Docker context');
+like($workflow, qr/commit_sha:/, 'reusable deployment accepts an explicit commit SHA');
+like($workflow, qr/group: deploy-production/, 'deployment paths share one concurrency group');
 done_testing;
+
