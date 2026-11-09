@@ -20,7 +20,11 @@ like(
     'deploy action applies the service-level maximum instance count',
 );
 
-ok(index($workflow, 'name: Build image') < index($workflow, '- id: auth'),
+my $build_pos = index($workflow, 'name: Build image');
+my $auth_pos = index($workflow, '- id: auth');
+ok($build_pos >= 0, 'Docker build marker exists');
+ok($auth_pos >= 0, 'cloud auth marker exists');
+ok($build_pos >= 0 && $auth_pos >= 0 && $build_pos < $auth_pos,
     'cloud credentials are created only after Docker build');
 open my $ignore_fh, '<', '.dockerignore' or die $!;
 my $ignore = do { local $/; <$ignore_fh> };
