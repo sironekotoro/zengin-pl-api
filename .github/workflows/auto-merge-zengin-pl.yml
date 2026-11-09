@@ -42,9 +42,12 @@ permissions:
   contents: write
   pull-requests: write
   checks: read
+  actions: read
 
 jobs:
   auto-merge:
+    outputs:
+      merged_sha: ${{ steps.merge.outputs.merged_sha }}
     runs-on: ubuntu-latest
     # workflow_run由来のときだけ、関係ないPR/branchのCI完了で無駄に
     # 走らないよう追加のfilterを課す。schedule/workflow_dispatchには
@@ -55,7 +58,7 @@ jobs:
       (
         github.event_name != 'workflow_run' ||
         (
-          github.event.workflow_run.event == 'pull_request' &&
+          (github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'workflow_dispatch') &&
           github.event.workflow_run.conclusion == 'success' &&
           github.event.workflow_run.head_branch == 'chore/update-zengin-pl'
         )
@@ -67,7 +70,19 @@ jobs:
           # 内容はscriptがgh経由でAPI越しに読むだけで、実行はしない。
           ref: main
 
-      - name: Evaluate and merge the pin-update PR if it is safe
+      - id: merge
+        name: Evaluate and merge the pin-update PR if it is safe
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash bin/auto-merge-zengin-pl-pr.sh
+
+
+  deploy:
+    needs: auto-merge
+    if: needs.auto-merge.outputs.merged_sha != ''
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/deploy.yml
+    with:
+      commit_sha: ${{ needs.auto-merge.outputs.merged_sha }}
