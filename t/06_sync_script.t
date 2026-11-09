@@ -230,7 +230,7 @@ json=
 if [[ "$1" == "api" ]]; then
   case "$GH_MOCK_MODE" in
     all_success)
-      json='{"check_runs":[{"name":"Perl 5.36","status":"completed","conclusion":"success","html_url":"https://example.invalid/run1"},{"name":"Perl 5.42","status":"completed","conclusion":"success","html_url":"https://example.invalid/run2"}]}'
+      json='{"check_runs":[{"name":"Perl 5.36","status":"completed","conclusion":"success"},{"name":"Perl 5.38","status":"completed","conclusion":"success"},{"name":"Perl 5.40","status":"completed","conclusion":"success"},{"name":"Perl 5.42","status":"completed","conclusion":"success"}]}'
       ;;
     one_failed)
       json='{"check_runs":[{"name":"Perl 5.36","status":"completed","conclusion":"success"},{"name":"Perl 5.42","status":"completed","conclusion":"failure"}]}'
@@ -252,6 +252,17 @@ else
   exit 1
 fi
 
+for arg in "$@"; do
+  if [[ "$arg" == repos/*/actions/* ]]; then
+    if [[ "$arg" == */workflows/* ]]; then
+      sha="${arg#*head_sha=}"; sha="${sha%%&*}"
+      jq -n --arg sha "$sha" '[{workflow_runs:[{id:123,run_attempt:1,head_sha:$sha,head_branch:"master",event:"push",status:"completed",conclusion:"success"}]}]'
+    else
+      jq '[{jobs:.check_runs}]' <<<"$json"
+    fi
+    exit 0
+  fi
+done
 if [[ -n "$filter" ]]; then
   jq "$filter" <<<"$json"
 else
@@ -263,3 +274,4 @@ MOCK
 
     return $dir;
 }
+
