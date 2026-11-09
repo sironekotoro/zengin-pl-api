@@ -36,47 +36,32 @@ REQUIRED_REF_FILE="${REQUIRED_REF_FILE:-zengin-pl.ref}"
 # 40文字hex 1行 -> 別の40文字hex 1行という置換だけ」であることを検証する。
 # 満たせば "OLD_SHA NEW_SHA" を1行標準出力へ返す。
 parse_pin_diff() {
-    local diff_text="$1"
-    local file_count removed_count added_count old_line new_line
-
-    file_count="$(grep -cE '^diff --git ' <<<"$diff_text" || true)"
-    if [[ "$file_count" -ne 1 ]]; then
-        echo "expected exactly one changed file, found ${file_count}" >&2
-        return 1
-    fi
-
-    if ! grep -qE "^diff --git a/${REQUIRED_REF_FILE//./\\.} b/${REQUIRED_REF_FILE//./\\.}\$" <<<"$diff_text"; then
-        echo "the changed file is not exactly ${REQUIRED_REF_FILE}" >&2
-        return 1
-    fi
-
-    # "---"/"+++" ヘッダは2文字目も同じ記号なので除外し、実際の内容行だけを拾う。
-    removed_count="$(grep -cE '^-[^-]' <<<"$diff_text" || true)"
-    added_count="$(grep -cE '^\+[^+]' <<<"$diff_text" || true)"
-
-    if [[ "$removed_count" -ne 1 || "$added_count" -ne 1 ]]; then
-        echo "expected exactly one removed line and one added line, found -${removed_count}/+${added_count}" >&2
-        return 1
-    fi
-
-    old_line="$(grep -E '^-[^-]' <<<"$diff_text")"
-    new_line="$(grep -E '^\+[^+]' <<<"$diff_text")"
-    old_line="${old_line#-}"
-    new_line="${new_line#+}"
-
-    if ! validate_sha_format "$old_line" || ! validate_sha_format "$new_line"; then
-        echo "the diff is not a 40-character lowercase hex SHA replacement" >&2
-        return 1
-    fi
-
+    local diff_text="$1" old_line new_line
+    local -a lines
+    mapfile -t lines < <(printf '%s' "$diff_text")
+    # A normal one-line text replacement has exactly these seven records.
+    # Reject blank additions, context, extra hunks, mode changes and no-newline markers.
+    [[ "${#lines[@]}" -eq 7 ]] || return 1
+    [[ "${lines[0]}" == "diff --git a/${REQUIRED_REF_FILE} b/${REQUIRED_REF_FILE}" ]] || return 1
+    [[ "${lines[1]}" =~ ^index\ [0-9a-f]+\.\.[0-9a-f]+\ 100644$ ]] || return 1
+    [[ "${lines[2]}" == "--- a/${REQUIRED_REF_FILE}" ]] || return 1
+    [[ "${lines[3]}" == "+++ b/${REQUIRED_REF_FILE}" ]] || return 1
+    [[ "${lines[4]}" == '@@ -1 +1 @@' ]] || return 1
+    [[ "${lines[5]}" =~ ^-[0-9a-f]{40}$ ]] || return 1
+    [[ "${lines[6]}" =~ ^\+[0-9a-f]{40}$ ]] || return 1
+    old_line="${lines[5]#-}"
+    new_line="${lines[6]#+}"
+    [[ "$old_line" != "$new_line" ]] || return 1
     printf '%s %s\n' "$old_line" "$new_line"
 }
 
 no_blocking_reviews() {
     local reviews_json="$1"
-    local blocking
-    blocking="$(jq '[.[] | select(.state == "CHANGES_REQUESTED")] | length' <<<"$reviews_json")"
-    [[ "$blocking" -eq 0 ]]
+    jq -e '
+        type == "array" and all(.[];
+          .state == "APPROVED" or .state == "COMMENTED" or
+          .state == "DISMISSED" or .state == "PENDING")
+    ' <<<"$reviews_json" >/dev/null
 }
 
 # --- gh/GitHub APIに依存する処理 ---
@@ -89,7 +74,7 @@ find_candidate_pr() {
 pr_snapshot() {
     local pr_number="$1"
     gh pr view "$pr_number" --repo "$API_REPO" --json \
-        author,baseRefName,headRefName,headRefOid,isDraft,files,mergeable,reviews
+        author,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository,isDraft,files,mergeable,reviews
 }
 
 current_head_sha() {
@@ -102,25 +87,51 @@ pr_diff() {
     gh pr diff "$pr_number" --repo "$API_REPO"
 }
 
-review_threads_all_resolved() {
-    local pr_number="$1"
-    local owner name unresolved
-    owner="${API_REPO%%/*}"
-    name="${API_REPO##*/}"
+# Validate bytes from an immutable commit, not shell command-substitution text
+# (which strips trailing newlines). A pin is exactly 40 lowercase hex bytes + LF.
+pin_at_sha() {
+    local sha="$1" json
+    validate_sha_format "$sha" || return 1
+    json="$(gh api "repos/${API_REPO}/contents/${REQUIRED_REF_FILE}?ref=${sha}")" || return 1
+    jq -e --arg path "$REQUIRED_REF_FILE" '
+        .type == "file" and .path == $path and .encoding == "base64" and .size == 41
+    ' <<<"$json" >/dev/null || return 1
+    jq -er '.content' <<<"$json" | base64 --decode | perl -0777 -e '
+        my $bytes = <STDIN> // q{};
+        $bytes =~ /\A([0-9a-f]{40})\n\z/ or exit 1; print $1;
+    '
+}
 
-    unresolved="$(gh api graphql -f query='
-        query($owner: String!, $name: String!, $number: Int!) {
+current_base_sha() {
+    gh api "repos/${API_REPO}/commits/${REQUIRED_BASE}" --jq .sha
+}
+
+head_contains_base() {
+    local base_sha="$1" head_sha="$2" comparison
+    comparison="$(gh api "repos/${API_REPO}/compare/${base_sha}...${head_sha}")" || return 1
+    jq -e --arg base "$base_sha" '.merge_base_commit.sha == $base' <<<"$comparison" >/dev/null
+}
+
+review_threads_all_resolved() {
+    local pr_number="$1" pages
+    pages="$(gh api graphql --paginate --slurp -f query='
+        query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
           repository(owner: $owner, name: $name) {
             pullRequest(number: $number) {
-              reviewThreads(first: 100) {
+              reviewThreads(first: 100, after: $endCursor) {
                 nodes { isResolved }
+                pageInfo { hasNextPage endCursor }
               }
             }
           }
-        }' -f owner="$owner" -f name="$name" -F number="$pr_number" \
-        --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length')"
-
-    [[ "$unresolved" -eq 0 ]]
+        }' -f owner="${API_REPO%%/*}" -f name="${API_REPO##*/}" -F number="$pr_number")" || return 1
+    jq -e '
+        type == "array" and length > 0 and
+        all(.[]; (.errors // [] | length) == 0 and
+          (.data.repository.pullRequest.reviewThreads.nodes | type) == "array" and
+          all(.data.repository.pullRequest.reviewThreads.nodes[]; .isResolved == true)) and
+        (last.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage == false)
+    ' <<<"$pages" >/dev/null
 }
 
 # Both required jobs must succeed in the latest test.yml run on the exact head.
@@ -159,10 +170,11 @@ main() {
         exit 1
     }
 
-    local snapshot author base head_branch head_sha is_draft files_json reviews_json mergeable
+    local snapshot author base base_sha head_branch head_sha is_draft files_json reviews_json mergeable
     snapshot="$(pr_snapshot "$pr_number")"
     author="$(jq -r '.author.login' <<<"$snapshot")"
     base="$(jq -r '.baseRefName' <<<"$snapshot")"
+    base_sha="$(jq -r '.baseRefOid' <<<"$snapshot")"
     head_branch="$(jq -r '.headRefName' <<<"$snapshot")"
     head_sha="$(jq -r '.headRefOid' <<<"$snapshot")"
     is_draft="$(jq -r '.isDraft' <<<"$snapshot")"
@@ -176,6 +188,12 @@ main() {
     [[ "$base" == "$REQUIRED_BASE" ]] || reject_hard "unexpected base branch '${base}'"
     [[ "$head_branch" == "$REQUIRED_HEAD_BRANCH" ]] || reject_hard "unexpected head branch '${head_branch}'"
     [[ "$is_draft" == "false" ]] || reject_hard "PR is a draft"
+    jq -e '.isCrossRepository == false' <<<"$snapshot" >/dev/null || reject_hard "cross-repository or unknown PR origin"
+    validate_sha_format "$head_sha" && validate_sha_format "$base_sha" || reject_hard "invalid head/base SHA"
+    local latest_base_sha
+    latest_base_sha="$(current_base_sha)" || reject_soft "could not read current base SHA"
+    [[ "$latest_base_sha" == "$base_sha" ]] || reject_soft "base branch changed since snapshot"
+    head_contains_base "$base_sha" "$head_sha" || reject_soft "PR branch is behind main; refresh branch and approve fresh CI"
 
     local file_count file_path
     file_count="$(jq 'length' <<<"$files_json")"
@@ -190,6 +208,11 @@ main() {
         reject_hard "diff is not a single 40-hex SHA replacement in ${REQUIRED_REF_FILE}"
     fi
     read -r old_sha new_sha <<<"$pin_result"
+    local base_pin head_pin
+    base_pin="$(pin_at_sha "$base_sha")" || reject_hard "base pin bytes do not match the diff"
+    head_pin="$(pin_at_sha "$head_sha")" || reject_hard "head pin bytes do not match the diff"
+    [[ "$base_pin" == "$old_sha" ]] || reject_hard "base pin bytes do not match the diff"
+    [[ "$head_pin" == "$new_sha" ]] || reject_hard "head pin bytes do not match the diff"
     echo "Candidate pin update: ${old_sha} -> ${new_sha}"
 
     # 13-14: レビュー状態。「今はまだ」なので正常停止(soft)。
@@ -218,6 +241,11 @@ main() {
     if [[ "$latest_head_sha" != "$head_sha" ]]; then
         reject_soft "PR head changed during validation (${head_sha} -> ${latest_head_sha}); will re-evaluate next run"
     fi
+
+    # GitHub merge API has a head-SHA precondition but no base-SHA precondition.
+    # This catches observed base movement, not movement after this final read.
+    latest_base_sha="$(current_base_sha)" || reject_soft "could not re-read current base SHA"
+    [[ "$latest_base_sha" == "$base_sha" ]] || reject_soft "main changed during validation; refresh branch and approve fresh CI"
 
     echo "All conditions satisfied; merging PR #${pr_number} (head ${head_sha})"
     local result merged_sha
