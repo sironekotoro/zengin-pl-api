@@ -5,6 +5,15 @@ on:
     branches:
       - main
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      commit_sha:
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -16,14 +25,25 @@ env:
   REPOSITORY: zengin-pl-api
   SERVICE: zengin-pl-api
   MAX_INSTANCES: '3'
-  IMAGE: asia-northeast1-docker.pkg.dev/zengin-pl-api/zengin-pl-api/zengin-pl-api:${{ github.sha }}
+  IMAGE: asia-northeast1-docker.pkg.dev/zengin-pl-api/zengin-pl-api/zengin-pl-api:${{ inputs.commit_sha || github.sha }}
 
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.commit_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Reject stale or non-main deployment
+        env:
+          DEPLOY_SHA: ${{ inputs.commit_sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
+          test "$(git rev-parse origin/main)" = "$DEPLOY_SHA"
 
       - uses: shogo82148/actions-setup-perl@v1
         with:
@@ -40,20 +60,6 @@ jobs:
           PERL5OPT: -MTest2::Plugin::UTF8=encoding_only
         run: |
           prove -lr t
-
-      - id: auth
-        uses: google-github-actions/auth@v3
-        with:
-          workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
-
-      - uses: google-github-actions/setup-gcloud@v3
-        with:
-          project_id: ${{ env.PROJECT_ID }}
-
-      - name: Configure Docker auth
-        run: |
-          gcloud auth configure-docker "${{ env.REGION }}-docker.pkg.dev" --quiet
 
       - name: Set build metadata
         run: |
@@ -113,9 +119,37 @@ jobs:
         run: |
           docker rm -f zengin-pl-api-contract-test || true
 
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker auth
+        run: |
+          gcloud auth configure-docker "${{ env.REGION }}-docker.pkg.dev" --quiet
+
+      - name: Recheck main before publishing
+        env:
+          DEPLOY_SHA: ${{ inputs.commit_sha || github.sha }}
+        run: |
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$DEPLOY_SHA"
+
       - name: Push image
         run: |
           docker push "${IMAGE}"
+
+      - name: Recheck main before Cloud Run update
+        env:
+          DEPLOY_SHA: ${{ inputs.commit_sha || github.sha }}
+        run: |
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$DEPLOY_SHA"
 
       - id: deploy
         uses: google-github-actions/deploy-cloudrun@v3
@@ -127,9 +161,10 @@ jobs:
           env_vars: |
             APP_NAME=zengin-pl-api
             APP_VERSION=${{ github.ref_name }}
-            APP_GIT_SHA=${{ github.sha }}
+            APP_GIT_SHA=${{ inputs.commit_sha || github.sha }}
             APP_BUILD_TIME=${{ env.APP_BUILD_TIME }}
 
       - name: Show service URL
         run: |
           echo "Cloud Run URL: ${{ steps.deploy.outputs.url }}"
+
