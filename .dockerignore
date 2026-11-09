@@ -8,3 +8,8 @@ cpanm-home
 blib
 cover_db
 *.tar.gz
+
+
+# Workload Identity Federation credentials must never enter the image.
+gha-creds-*.json
+**/gha-creds-*.json
