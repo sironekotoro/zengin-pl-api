@@ -28,7 +28,7 @@ SYNC_BRANCH="${SYNC_BRANCH:-chore/update-zengin-pl}"
 current_pinned_sha() {
     local ref_file="$1"
     if [[ -f "$ref_file" ]]; then
-        tr -d '\r\n' < "$ref_file"
+        read_pin_file "$ref_file"
     fi
 }
 
@@ -37,7 +37,7 @@ current_pinned_sha() {
 write_ref_if_changed() {
     local ref_file="$1" new_sha="$2"
     local current
-    current="$(current_pinned_sha "$ref_file")"
+    current="$(current_pinned_sha "$ref_file")" || return 2
 
     if [[ "$current" == "$new_sha" ]]; then
         return 1
@@ -75,14 +75,15 @@ zengin-pl側のmaster branch上で存在が確認され、Perl test matrixが
 成功したcommitのみをpinしています。このPRの内容は \`${ZENGIN_PL_REF_FILE}\`
 の1行だけです。
 
-mergeすると、既存の deploy workflow (\`.github/workflows/deploy.yml\`) が
-通常どおり実行され、Cloud Runへ自動deployされます。
+PRのCI開始は手動承認が必要です。最新headの承認待ちrunを確認してください。
+botがmergeした場合は、同じworkflowから deploy workflow (\`.github/workflows/deploy.yml\`)
+を確認済みmerge SHAで明示的に呼び出します。merge成功だけではdeploy完了とは限りません。
 
 このPRは条件を満たせば[auto-merge-zengin-pl.yml](.github/workflows/auto-merge-zengin-pl.yml)
 により自動でmergeされます(author・branch・変更ファイル・diff形状・
 zengin-pl/zengin-pl-api双方のCI結果などを再検証したうえで、全て満たした
-場合のみ)。条件を満たさない場合はopenのまま残るので、その際は内容を
-確認して人間がmergeしてください。
+場合のみ)。条件を満たさない場合はopenのまま残ります。失敗理由を確認し、
+必要に応じてbranchを最新mainから更新して、新しいCIを手動承認してください。
 EOF
 }
 
@@ -174,3 +175,4 @@ main() {
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi
+
