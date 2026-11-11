@@ -98,7 +98,7 @@ jobs:
           curl -fsS -G --data-urlencode 'name=東京' http://127.0.0.1:5000/api/banks/0001/branches | grep '"branches"'
 
       - name: Validate running API against OpenAPI
-        uses: schemathesis/action@v3.0.0
+        uses: schemathesis/action@v3.1.0
         with:
           schema: openapi.yaml
           base-url: http://127.0.0.1:5000
