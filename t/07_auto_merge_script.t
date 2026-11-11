@@ -18,7 +18,8 @@ plan skip_all => 'jq is not available'   unless _find_in_path('jq');
 
 my $OLD_SHA = '2339d6757c57e4365b0c8bf1017b9a4608c4d7eb';
 my $NEW_SHA = 'c14b2a7be090d6a54ef445947f09867c7a9cca05';
-my $HEAD_SHA = 'headsha0000000000000000000000000000000001';
+my $HEAD_SHA = 'b' x 40;
+my $BASE_SHA = 'a' x 40;
 
 my $VALID_DIFF = <<"DIFF";
 diff --git a/zengin-pl.ref b/zengin-pl.ref
@@ -66,8 +67,31 @@ EOF4
     ok(!_source_and_run(qq{parse_pin_diff "\$(cat <<'EOF6'\n$non_hex\nEOF6\n)"}), 'a non-hex "SHA" is rejected');
 };
 
-subtest 'no_blocking_reviews rejects only CHANGES_REQUESTED' => sub {
+subtest 'parse_pin_diff rejects hidden extra changes and mode changes' => sub {
+    ok(_source_and_run("parse_pin_diff " . _shell_single_quote($VALID_DIFF)), 'control: identical invocation accepts valid diff with final LF');
+    my @bad = (
+        $VALID_DIFF . "+\n",
+        $VALID_DIFF . "-\n",
+        $VALID_DIFF . "+ +hidden\n",
+        $VALID_DIFF . "++hidden\n",
+        $VALID_DIFF . "--hidden\n",
+        $VALID_DIFF . "\\ No newline at end of file\n",
+        $VALID_DIFF . "\@\@ -3 +3 \@\@\n-old\n+new\n",
+    );
+    (my $mode = $VALID_DIFF) =~ s/100644/100755/;
+    push @bad, $mode;
+    (my $context = $VALID_DIFF) =~ s/\@\@ -1 \+1 \@\@/\@\@ -1,2 +1,2 \@\@\n context/;
+    push @bad, $context;
+    for my $diff (@bad) {
+        ok(!_source_and_run("parse_pin_diff " . _shell_single_quote($diff)), 'unexpected diff record rejected');
+    }
+};
+
+subtest 'no_blocking_reviews requires known nonblocking review states' => sub {
     ok(_source_and_run(q{no_blocking_reviews '[]'}), 'no reviews at all is fine');
+    for my $bad ('null', '{}', 'invalid json', '[{}]', '[{"state":"UNKNOWN"}]') {
+        ok(!_source_and_run('no_blocking_reviews ' . _shell_single_quote($bad)), 'missing or malformed reviews block');
+    }
     ok(_source_and_run(q{no_blocking_reviews '[{"state":"APPROVED"}]'}), 'an approval is fine');
     ok(
         !_source_and_run(q{no_blocking_reviews '[{"state":"APPROVED"},{"state":"CHANGES_REQUESTED"}]'}),
@@ -81,6 +105,8 @@ subtest 'main(): full scenarios via a scripted gh mock' => sub {
     my $base_pr_view = {
         author       => { login => 'app/github-actions' },
         baseRefName  => 'main',
+        baseRefOid   => $BASE_SHA,
+        isCrossRepository => \0,
         headRefName  => 'chore/update-zengin-pl',
         headRefOid   => $HEAD_SHA,
         isDraft      => \0,
@@ -100,12 +126,54 @@ subtest 'main(): full scenarios via a scripted gh mock' => sub {
             pr_list  => '[{"number":11}]',
             pr_view  => $base_pr_view,
             pr_diff  => $VALID_DIFF,
-            zengin_pl_checkruns => _checkruns_json(['Perl 5.36', 'Perl 5.42']),
+            zengin_pl_checkruns => _checkruns_json(['Perl 5.36', 'Perl 5.38', 'Perl 5.40', 'Perl 5.42']),
             api_checkruns       => _checkruns_json(['test', 'docker']),
             graphql  => _threads_json([]),
         );
         is($r->{exit}, 0, 'exits 0');
         like($r->{log}, qr/MERGE_CALLED.*pulls\/11\/merge.*sha=\Q$HEAD_SHA\E/, 'merges PR 11 pinned to the validated head SHA');
+        is($r->{output}, 'merged_sha=' . ('a' x 40) . "\n", 'confirmed merge SHA is published to downstream job');
+    };
+
+    subtest 'main requires approval of the exact current head' => sub {
+        my $r = _run_main(pr_list=>'[{"number":11}]', pr_view=>$base_pr_view, pr_diff=>$VALID_DIFF,
+            approved_head_sha=>'c' x 40);
+        is($r->{exit},1,'stale approval fails closed');
+        like($r->{out},qr/explicit owner approval for this PR and head SHA is required/,'approval gate reached');
+        unlike($r->{log},qr/MERGE_CALLED/,'cannot merge with stale approval');
+    };
+
+    for my $result ('{"merged":false,"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}', '{"merged":true}', '{"merged":true,"sha":"bad"}', 'not json', '') {
+        my $r = _run_main(pr_list=>'[{"number":11}]', pr_view=>$base_pr_view, pr_diff=>$VALID_DIFF,
+            zengin_pl_checkruns=>_checkruns_json(['Perl 5.36','Perl 5.38','Perl 5.40','Perl 5.42']),
+            api_checkruns=>_checkruns_json(['test','docker']), merge_result=>$result);
+        like($r->{log}, qr/MERGE_CALLED/, 'negative response fixture reaches merge API');
+        isnt($r->{exit}, 0, 'unconfirmed/malformed merge response fails');
+        is($r->{output}, '', 'no downstream deployment SHA emitted');
+    }
+
+    for my $case (
+        ['base pin mismatch', 'override_pin_at_sha', "echo '" . ('c' x 40) . "'", qr/base pin bytes do not match/],
+        ['head pin error with plausible output', 'override_pin_at_sha', "if [[ \"\$1\" == '$BASE_SHA' ]]; then echo '$OLD_SHA'; else echo '$NEW_SHA'; return 1; fi", qr/head pin bytes do not match/],
+        ['head pin malformed', 'override_pin_at_sha', "if [[ \"\$1\" == '$BASE_SHA' ]]; then echo '$OLD_SHA'; else return 1; fi", qr/head pin bytes do not match/],
+        ['base API error with plausible output', 'override_current_base_sha', "echo '$BASE_SHA'; return 1", qr/could not read current base SHA/],
+        ['branch behind main', 'override_head_contains_base', 'return 1', qr/PR branch is behind main/],
+    ) {
+        subtest $case->[0] => sub {
+            my $r = _run_main(pr_list=>'[{"number":11}]', pr_view=>$base_pr_view, pr_diff=>$VALID_DIFF, $case->[1]=>$case->[2]);
+            like($r->{out}, $case->[3], 'stops for the intended reason');
+            unlike($r->{log}, qr/MERGE_CALLED/, 'does not merge');
+        };
+    }
+    subtest 'main advances after CI validation' => sub {
+        my $marker = tempdir(CLEANUP=>1) . '/base-read';
+        my $override = "if [[ -f '$marker' ]]; then echo '" . ('c' x 40) . "'; else touch '$marker'; echo '$BASE_SHA'; fi";
+        my $r = _run_main(pr_list=>'[{"number":11}]', pr_view=>$base_pr_view, pr_diff=>$VALID_DIFF,
+            zengin_pl_checkruns=>_checkruns_json(['Perl 5.36','Perl 5.38','Perl 5.40','Perl 5.42']),
+            api_checkruns=>_checkruns_json(['test','docker']), override_current_base_sha=>$override);
+        is($r->{exit}, 0, 'safe stop');
+        like($r->{out}, qr/main changed during validation/, 'reaches final base freshness check');
+        unlike($r->{log}, qr/MERGE_CALLED/, 'does not merge');
     };
 
     subtest 'unexpected author is rejected hard (exit 1)' => sub {
@@ -160,7 +228,7 @@ subtest 'main(): full scenarios via a scripted gh mock' => sub {
             pr_list => '[{"number":11}]',
             pr_view => $base_pr_view,
             pr_diff => $VALID_DIFF,
-            zengin_pl_checkruns => _checkruns_json(['Perl 5.36']),
+            zengin_pl_checkruns => _checkruns_json(['Perl 5.36', 'Perl 5.38', 'Perl 5.40', 'Perl 5.42']),
             override_is_ancestor => 'return 1',
         );
         is($r->{exit}, 1, 'exits 1 (re-verification failed)');
@@ -182,10 +250,11 @@ subtest 'main(): full scenarios via a scripted gh mock' => sub {
             pr_list => '[{"number":11}]',
             pr_view => $base_pr_view,
             pr_diff => $VALID_DIFF,
-            zengin_pl_checkruns => _checkruns_json(['Perl 5.36']),
+            zengin_pl_checkruns => _checkruns_json(['Perl 5.36', 'Perl 5.38', 'Perl 5.40', 'Perl 5.42']),
             api_checkruns       => _checkruns_json_with([{ name => 'test', status => 'in_progress', conclusion => JSON_NULL() }]),
         );
         is($r->{exit}, 0, 'exits 0 (transient, not structurally broken)');
+        like($r->{out}, qr/zengin-pl-api CI is not fully green/, 'reaches API CI rejection');
         unlike($r->{log}, qr/MERGE_CALLED/, 'merge is never called');
     };
 
@@ -194,7 +263,7 @@ subtest 'main(): full scenarios via a scripted gh mock' => sub {
             pr_list => '[{"number":11}]',
             pr_view => $base_pr_view,
             pr_diff => $VALID_DIFF,
-            zengin_pl_checkruns => _checkruns_json(['Perl 5.36']),
+            zengin_pl_checkruns => _checkruns_json(['Perl 5.36', 'Perl 5.38', 'Perl 5.40', 'Perl 5.42']),
             api_checkruns       => _checkruns_json([]),
         );
         is($r->{exit}, 0, 'exits 0');
@@ -226,7 +295,7 @@ subtest 'main(): full scenarios via a scripted gh mock' => sub {
             pr_list => '[{"number":11}]',
             pr_view => $base_pr_view,
             pr_diff => $VALID_DIFF,
-            zengin_pl_checkruns => _checkruns_json(['Perl 5.36']),
+            zengin_pl_checkruns => _checkruns_json(['Perl 5.36', 'Perl 5.38', 'Perl 5.40', 'Perl 5.42']),
             api_checkruns       => _checkruns_json(['test', 'docker']),
             graphql             => _threads_json([0]),
         );
@@ -239,12 +308,13 @@ subtest 'main(): full scenarios via a scripted gh mock' => sub {
             pr_list  => '[{"number":11}]',
             pr_view  => $base_pr_view,
             pr_diff  => $VALID_DIFF,
-            zengin_pl_checkruns => _checkruns_json(['Perl 5.36']),
+            zengin_pl_checkruns => _checkruns_json(['Perl 5.36', 'Perl 5.38', 'Perl 5.40', 'Perl 5.42']),
             api_checkruns       => _checkruns_json(['test', 'docker']),
             graphql             => _threads_json([]),
             override_current_head_sha => 'echo "a-different-sha-than-before-0000000001"',
         );
         is($r->{exit}, 0, 'exits 0 (will re-evaluate on the next run)');
+        like($r->{out}, qr/PR head changed during validation/, 'reaches head-race rejection');
         unlike($r->{log}, qr/MERGE_CALLED/, 'merge is never called for a stale head');
     };
 };
@@ -270,9 +340,9 @@ sub _threads_json {
     require JSON::PP;
     my %unresolved = map { $_ => 1 } @{$unresolved_indices};
     my @nodes = map { +{ isResolved => $unresolved{$_} ? JSON::PP::false() : JSON::PP::true() } } 0 .. 2;
-    return JSON::PP->new->canonical->encode({
-        data => { repository => { pullRequest => { reviewThreads => { nodes => \@nodes } } } },
-    });
+    return JSON::PP->new->canonical->encode([{
+        data => { repository => { pullRequest => { reviewThreads => { nodes => \@nodes, pageInfo => { hasNextPage => JSON::PP::false() } } } } },
+    }]);
 }
 
 sub _find_in_path {
@@ -302,15 +372,27 @@ sub _run_main {
         graphql             => $args{graphql}  // _threads_json([]),
         zengin_pl_checkruns => $args{zengin_pl_checkruns} // _checkruns_json([]),
         api_checkruns       => $args{api_checkruns}       // _checkruns_json([]),
+        merge_result => $args{merge_result} // '{"merged":true,"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}',
     );
 
     my ($log_fh, $log_file) = tempfile();
     close $log_fh;
+    my ($output_fh, $output_file) = tempfile();
+    close $output_fh;
+    my ($event_fh, $event_file) = tempfile();
+    print {$event_fh} JSON::PP->new->encode({sender=>{login=>'sironekotoro',type=>'User'}, inputs=>{pr_number=>'11',head_sha=>($args{approved_head_sha}//$HEAD_SHA)}});
+    close $event_fh;
 
     my $override_is_ancestor      = $args{override_is_ancestor}      // 'return 0';
     my $override_current_head_sha = $args{override_current_head_sha};
 
-    my $overrides = "clone_zengin_pl() { mkdir -p \"\$1\"; }\n"
+    my $base_override = $args{override_current_base_sha} // "echo '$BASE_SHA'";
+    my $contains_override = $args{override_head_contains_base} // 'return 0';
+    my $pin_override = $args{override_pin_at_sha} // "if [[ \"\$1\" == '$BASE_SHA' ]]; then echo '$OLD_SHA'; else echo '$NEW_SHA'; fi";
+    my $overrides = "current_base_sha() { $base_override; }\n"
+        . "head_contains_base() { $contains_override; }\n"
+        . "pin_at_sha() { $pin_override; }\n"
+        . "clone_zengin_pl() { mkdir -p \"\$1\"; }\n"
         . "commit_exists() { return 0; }\n"
         . "is_ancestor_of_master() { $override_is_ancestor; }\n";
     $overrides .= "current_head_sha() { $override_current_head_sha; }\n" if $override_current_head_sha;
@@ -320,9 +402,11 @@ sub _run_main {
     # $overridesが1行に溶接されて構文エラーになる。シェルへ渡す文字列は
     # 必ず_shell_single_quote()(単一引用符での正しいエスケープ)を使う。
     my $cmd = sprintf(
-        'PATH=%s:$PATH GH_CALL_LOG=%s bash -c %s',
+        'PATH=%s:$PATH GH_CALL_LOG=%s GITHUB_OUTPUT=%s GITHUB_EVENT_PATH=%s GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/main GITHUB_ACTOR=sironekotoro GITHUB_TRIGGERING_ACTOR=sironekotoro bash -c %s',
         _shell_single_quote($mock_dir),
         _shell_single_quote($log_file),
+        _shell_single_quote($output_file),
+        _shell_single_quote($event_file),
         _shell_single_quote("source '$script' >/dev/null 2>&1; $overrides main"),
     );
 
@@ -333,6 +417,7 @@ sub _run_main {
         exit => $exit,
         out  => $out,
         log  => _slurp($log_file),
+        output => _slurp($output_file),
     };
 }
 
@@ -381,9 +466,26 @@ MOCK_HEADER
     print {$fh} "GRAPHQL_JSON=" . _shell_single_quote($json_for{GRAPHQL}) . "\n";
     print {$fh} "ZENGINPL_CHECKRUNS_JSON=" . _shell_single_quote($json_for{ZENGINPL_CHECKRUNS}) . "\n";
     print {$fh} "API_CHECKRUNS_JSON=" . _shell_single_quote($json_for{API_CHECKRUNS}) . "\n";
+    print {$fh} "MERGE_RESULT_JSON=" . _shell_single_quote($data{merge_result}) . "\n";
     print {$fh} "PR_DIFF_FILE=" . _shell_single_quote($pr_diff_file) . "\n";
 
     print {$fh} <<'MOCK_BODY';
+for arg in "$@"; do
+  if [[ "$arg" == repos/*/actions/* ]]; then
+    if [[ "$arg" == *zengin-pl-api/* ]]; then
+      fixture="$API_CHECKRUNS_JSON"; branch=chore/update-zengin-pl
+    else
+      fixture="$ZENGINPL_CHECKRUNS_JSON"; branch=master
+    fi
+    if [[ "$arg" == */workflows/* ]]; then
+      sha="${arg#*head_sha=}"; sha="${sha%%&*}"
+      jq -n --arg sha "$sha" --arg branch "$branch" '[{workflow_runs:[{id:123,run_attempt:1,head_sha:$sha,head_branch:$branch,event:"workflow_dispatch",status:"completed",conclusion:"success"}]}]'
+    else
+      jq '[{jobs:.check_runs}]' <<<"$fixture"
+    fi
+    exit 0
+  fi
+done
 if [[ "$1" == "pr" && "$2" == "view" ]]; then
   json="$PR_VIEW_JSON"
 elif [[ "$1" == "pr" && "$2" == "diff" ]]; then
@@ -398,6 +500,7 @@ elif [[ "$1" == "api" && "$2" == *"zengin-pl-api/commits/"*"/check-runs" ]]; the
   json="$API_CHECKRUNS_JSON"
 elif [[ "$1" == "api" && "$2" == "--method" ]]; then
   echo "MERGE_CALLED $*" >> "$GH_CALL_LOG"
+  printf '%s\n' "$MERGE_RESULT_JSON"
   exit 0
 else
   echo "unhandled mock gh call: $*" >&2
@@ -422,3 +525,4 @@ sub _shell_single_quote {
     $str =~ s/'/'\\''/g;
     return "'" . $str . "'";
 }
+

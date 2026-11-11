@@ -404,157 +404,43 @@ Slack の署名付き request は手で作りにくいため、まずは Slack A
 [`.github/workflows/sync-zengin-pl.yml`](.github/workflows/sync-zengin-pl.yml) が `zengin-pl.ref` を
 追随させる更新PRを自動作成します。
 
-### 自動化されるもの・されないもの
+### 手動承認を残す運用
 
-自動化されているのは **PR作成からmergeまで** です。ただしmergeは、後述する極めて限定された
-安全条件をすべて満たした場合だけ行われます。
+1. 毎日 09:17 JST (00:17 UTC) に upstream の master を確認します。GitHub の schedule は遅延する場合があります。
+2. upstream の `actions.yml` の最新 run が、その SHA・master に対して成功し、`Perl 5.36` / `5.38` / `5.40` / `5.42` の4 jobがすべて成功した場合だけ更新PRを作ります。
+3. PRの最新headで `test` と `docker` が成功するまで待ちます。CIはGitHubの起動条件によって自動開始または承認待ちになります。承認待ちなら確認して開始してください。runが無い場合は `test` を対象branchで手動実行できます。**CIの開始・成功はmerge承認ではありません。**
+4. owner `sironekotoro` がPR内容と最新head SHAを確認し、Actions → **Auto-merge zengin-pl pin** → **Run workflow** でbranch **main** を選び、`pr_number` と40桁の `head_sha` を入力します。この操作が、そのPR・SHAのmergeと、その後の検証付きdeployの明示的な承認です。PR番号はGitHubのPR画面、head SHAはPRの最新commitから確認します。upstreamの `zengin-pl.ref` の値とは別です。
+5. workflowは実行者と再実行者が両方ownerであること、mainからの手動実行であること、入力PR番号・SHAが現在の対象PRと一致することを確認し、全安全条件を再検査します。merge APIが成功とmerge SHAを返した場合だけ再利用可能な `deploy.yml` を呼び出します。
 
-- `zengin-pl` masterのHEADを定期的に確認する(30分間隔 + 手動実行)
-- そのSHAが実在し、`zengin-pl`のmaster履歴上にあり、Perl test matrixが全て成功していることを検証する
-- 検証済みなら `chore/update-zengin-pl` branchで `zengin-pl.ref` だけを更新し、更新PRを作成(既存PRがあれば内容を更新)する
-- 上記PRの`zengin-pl-api`側CI([`test.yml`](.github/workflows/test.yml))が完了したら、
-  [`auto-merge-zengin-pl.yml`](.github/workflows/auto-merge-zengin-pl.yml)が全条件を再検証し、
-  満たしていれば自動でmergeする
+`workflow_run` とscheduleからのmerge起動はありません。CI成功だけ、ラベルやコメントだけ、PRレビューだけではmergeしません。所有者自身のPRを自分でApproveできないGitHubの制約に依存せず、ownerによるActionsの明示操作を使います。新しいPAT、GitHub App、secret、environment保護設定は追加しません。owner以外の手動実行・再実行は拒否します。GitHubが提供するのは認証済み実行者の情報で、画面を操作した物理的な人間の証明ではありません。ownerの認証情報でAPIからdispatchする自動処理を別途作れば同じ実行者として扱われるため、そのような無人dispatchはこの運用に追加しないでください。
 
-自動化されないもの:
+CI途中や失敗、PR head/base更新などで止まった場合は、問題を解消してCI成功を確認した後、最新PR番号・SHAで改めて実行してください。承認を将来の別SHAへ持ち越しません。ownerによる同じdispatchの再実行は同じPR/SHAへの再試行となり、その時点の安全条件を再確認します。一般のPRや人間作成PRは対象外です。
 
-- **一般のPRやhuman作成PRのmerge**。auto-mergeの対象は`chore/update-zengin-pl`から`main`への、
-  `github-actions[bot]`作成・`zengin-pl.ref`のSHA1行置換だけのPRに限られます(詳細は次項)。
-  それ以外のPRは今までどおり人間がmergeします。
-- **Cloud Runへのdeploy**。PRが(自動または人間の手で)`main`へmergeされた後、既存の
-  [`deploy.yml`](.github/workflows/deploy.yml)が通常どおりPerl test・Docker build・OpenAPI検証・
-  Schemathesis contract test・deployを実行します。この自動化自身は一切deployしません。
-- `zengin-pl.ref` 以外のファイル(APIコード・OpenAPI・Dockerfile等)の変更。
+この方式は既存のrepository ownerとActionsの手動実行機能を利用します。実際に承認を送ってmerge/deployまで動かす検証は、別途承認された本番試行で行います。Run workflowが利用できない場合は権限・Actionsの状態を確認して止め、別方式へ勝手に切り替えません。
 
-### なぜpull型(スケジュール実行)にしたか
+### 安全条件
 
-`zengin-pl`が更新のたびに`repository_dispatch`等でzengin-pl-apiを起動するpush型も検討しましたが、採用しませんでした。
-理由は以下のとおりです。
+- `app/github-actions` 作成の `chore/update-zengin-pl` → `main` の非draft PRだけを対象とします。
+- 変更は `zengin-pl.ref` 1ファイルの40桁小文字SHAの1行置換だけに限定します。diffの全行を検査し、固定base/head commitから取得したファイルの実バイトが「40桁小文字SHA + LF」の41バイトであることも検査します。空行、CRLF、改行欠落、mode変更などは拒否します。
+- upstream SHAの実在とmaster祖先関係、および上記4種類のPerl jobをmerge直前にも再確認します。
+- CIはworkflowファイル名、branch、head SHAで絞り込み、最新runの最新attemptのjobを全ページ取得して検証します。過去の成功runや他workflowの成功では代用しません。
+- 変更要求review、未解決thread、merge conflictがある場合は止まります。review threadは全ページ取得し、取得エラーや欠落時も止まります。
+- PR headが検証開始時のmain先端を含むことを確認します。PR headとmain先端をmerge直前に再取得し、merge APIにも検証済みhead SHAを渡します。mainが進んだ場合は止め、branch更新・新しいCI成功・最新SHAへの明示的なmerge承認が必要です。GitHubのmerge APIにはbase SHAの条件指定がないため、最終確認直後のmain更新までatomicに防げるわけではありません。branch protectionやmerge queueの設定は今回変更していません。
+- 自動mergeの判定コードはmainから取得し、PRのコードは実行しません。
+- deployはmainからのみ実行し、確認されたmerge SHAをcheckoutします。開始時と公開直前、Cloud Run更新直前にmainの先端と一致することを検証し、古いcommitのdeployを抑制します。ただしGitHubとCloud Runをまたぐ判定はatomicではなく、確認直後のmain更新を完全には防げません。deploy全体は共通concurrency groupで同時実行を避けます。ただしGitHub ActionsのconcurrencyはFIFOキューではなく、新しいrunが既存のpending runを置き換える場合があります。すべての中間commitのdeployは保証せず、最新mainのdeploy結果を確認します。
 
-- push型では、`zengin-pl`側にzengin-pl-apiへ書き込み可能な認証情報(fine-grained PATやGitHub App)を新たに
-  secretとして保管する必要があります。pull型ならzengin-pl-api自身の既定`GITHUB_TOKEN`だけで完結し、
-  **新しいsecretやGitHub Appの設定は一切不要**です。
-- push型は外部からのevent payload(`repository`や`sender`等)を受け取り、それを信頼してよいか検証する
-  責務が生まれます。pull型はそもそも外部payloadを受け取らないため、このリスクのカテゴリ自体が発生しません。
-- 書き込み権限がzengin-pl-api自身のrepositoryだけに閉じるため、監査しやすく、将来の変更もzengin-pl-api側だけで完結します。
+### 手動復旧と確認
 
-トレードオフは即時性です。`zengin-pl`のmaster更新から反映まで最大30分程度のずれがあります。今すぐ反映したい場合は
-`workflow_dispatch`で手動実行してください(後述)。
+- 同期を急ぐ場合: `Sync zengin-pl pin` をmainで手動実行します。任意のupstream SHAを指定しても同じ検証が必要です。
+- PRのCI待ち: 最新headのrunを確認します。承認待ちなら開始を承認し、runが無ければ原因を確認して `test` を対象branchで手動実行します。これはmergeの承認ではありません。
+- CI成功後の承認・再判定: ownerが `Auto-merge zengin-pl pin` をmainで、対象PR番号と最新head SHAを指定して手動実行します。
+- merge成功後にdeployが失敗・未起動の場合: GitHubのPR状態とmain先端、Actionsのdeploy結果を先に確認し、必要なら `deploy` をmainで手動実行します。既にmerge済みのPRは再mergeしません。auto-merge jobの再実行では、open PRが無いためmerge SHA出力が復元されずdeployも起動しません。「Re-run failed jobs」で元の出力を利用できる場合と、workflow全体の再実行は区別してください。通信切断などでmerge結果が不明な場合も、先にGitHubで実際の結果を確認します。
+- deploy後は `/api/meta` の **`api.git_sha`** が期待するmerge SHAに一致するかを自動検証します。`APP_GIT_SHA` は環境変数名で、JSONのfield名ではありません。
+- rolloutやキャッシュを考慮し、毎回異なるqueryとno-cache/no-store headerで問い合わせ、2回連続の一致を要求します。最大12回、各request最大15秒、間隔5秒で、既定の待ち時間は最大約235秒（処理時間を除く）です。一時的なHTTP失敗・古いSHA・欠落/不正JSONも上限内で再試行します。
+- 上限まで一致しなければdeploy jobを失敗にします。Cloud Runの変更自体は既に行われている可能性があるため、自動rollbackはせず、traffic・revision・実際の応答を確認します。2回の一致は全クライアントや全trafficの一致を保証するものではありません。merge成功だけではdeploy完了とはみなしません。
+- pin異常時は「40桁小文字hex + LFの41バイト」という要件と受信バイト数を診断に出します。自動補正せず、空行・CRLF・欠落改行などを確認して修正し、CIをやり直してください。
 
-### 必要なsecret / GitHub App設定
-
-**ありません。** `sync-zengin-pl.yml` は次の2つの権限だけを使います。
-
-- 読み取り: `zengin-pl`は公開repositoryのため、そのcommit/check-runs情報は認証なしで取得できます
-  (このworkflowでは既定の `GITHUB_TOKEN` を使い、匿名アクセスより高いrate limitの恩恵を受けています)
-- 書き込み: zengin-pl-api自身への書き込み(branch push・PR作成)は、このworkflowに宣言した既定の
-  `GITHUB_TOKEN` (`permissions: contents: write, pull-requests: write`)で完結します
-
-新しいPAT・GitHub App・repository secretの追加は不要です。
-
-### 重複PR対策
-
-固定branch `chore/update-zengin-pl` を再利用します(SHA単位のbranchは作りません)。新しい検証済みSHAが
-見つかるたびに、このbranchを`main`から作り直してforce pushし、開いているPRがあれば内容(diff・タイトル・本文)
-を更新するだけで、新しいPRは作りません。
-
-トレードオフ: 人間がこのPRをレビュー中に`zengin-pl`側がさらに更新されると、レビュー対象のdiffが
-書き換わります。頻繁なzengin-pl更新とレビュー期間が重なる場合は、レビューを終えてmergeするか、
-一旦レビューを止めてbranchの最新状態を確認してください。
-
-### 手動復旧方法
-
-自動実行が失敗した場合や、今すぐ反映したい場合は、GitHub Actionsの `Sync zengin-pl pin` workflowを
-`workflow_dispatch`で手動実行できます。
-
-- `sha` を省略: `zengin-pl` master HEADを使う(定期実行と同じ)
-- `sha` を指定: 特定のcommitをpinしたい場合に使う。**手動指定でも自動経路と全く同じ検証**
-  (40文字16進数の形式チェック、`zengin-pl`に実在するか、master履歴上にあるか、Perl test matrixが
-  全て成功しているか)を通過しない限り更新PRは作成されません。
-
-手動実行で作られる・更新されるPRも同じ`chore/update-zengin-pl`branchを使うため、CIが完了すれば
-[auto-merge](#auto-mergeの条件)の対象に通常どおり含まれます。
-
-### auto-mergeの条件
-
-[`bin/auto-merge-zengin-pl-pr.sh`](bin/auto-merge-zengin-pl-pr.sh)は、以下を**すべて**満たした場合だけ
-更新PRをmergeします。1つでも満たさなければmergeしません。
-
-1. `chore/update-zengin-pl` → `main` へのPRが実際に存在する(`gh pr list`でこの組み合わせだけを取得)
-2. PR作成者が `app/github-actions`(このrepository自身の`sync-zengin-pl.yml`が作るPRだけを対象にする)
-3. PRがdraftではない
-4. 変更ファイルが正確に1つで、それが `zengin-pl.ref` である
-5. diffが「40文字小文字hex SHA 1行 → 別の40文字小文字hex SHA 1行」の置換だけである
-6. 新SHAが`zengin-pl`に実在し、masterの履歴上にあり、Perl test matrixが全て成功している
-   (PR作成時の検証を信用せず、ここでもう一度取り直して確認する)
-7. `zengin-pl-api`自身のこのPRに対するcheck-runsが1件以上あり、全て成功している
-8. `CHANGES_REQUESTED`のreviewが無い
-9. 未解決のreview threadが無い
-10. GitHub上でconflictなくmergeできる状態(`mergeable == MERGEABLE`)
-11. ここまでの検証開始時に読んだPRのhead SHAが、mergeを呼び出す直前でも変わっていない
-    (変わっていれば中断する。再評価のタイミングは次項)
-
-### trigger設計とrace condition対策
-
-`auto-merge-zengin-pl.yml`は主に、このrepository自身のCI workflow(`test`)が完了した
-`workflow_run`で起動します。`workflow_run`でトリガされるworkflowの定義は常にdefault branch
-(`main`)上の内容が使われるため、`chore/update-zengin-pl`branch自体に何が含まれていても、
-実行されるコードは常に信頼できる`main`の版になります。
-
-ただし、triggerの`workflow_run` payload自体は「起こしにいくきっかけ」以上には信用しません。
-実際の判定に使う author・branch・変更ファイル・diff・reviews・CI結果・head SHAは、すべて
-scriptが`gh`経由でその場で取得し直します。特にhead SHAは、検証を始めた時点のものと、
-mergeを呼び出す直前に再取得したものが一致することを確認し(条件11)、さらにGitHubのmerge API
-自体にも期待するhead SHA(`sha`パラメータ)を渡します。これにより、検証中に
-`chore/update-zengin-pl`branchが新しいSHAへforce pushされて書き換わっていた場合、
-GitHub側でも古いhead SHAへのmergeがatomicに拒否されます。
-
-**`workflow_run`だけでは再評価されないケースがある。** `workflow_run`は`test`workflowの
-完了時にしか発火しません。しかし条件8(blocking review)・9(未解決thread)・10(mergeableが
-一時的に`UNKNOWN`)は、PRへの新しいcommit pushを伴わずに解消されることが多く(reviewの
-dismiss、threadのresolve、GitHub側のmergeable再計算待ちなど)、その場合`test`は再実行されず
-`workflow_run`も発火しません。これを放置すると、人間が問題を解消したのにPRがopenのまま
-気づかれず残ることになります。
-
-そのため`auto-merge-zengin-pl.yml`には、`workflow_run`に加えて15分間隔の`schedule`と
-`workflow_dispatch`も追加しています。`schedule`/`workflow_dispatch`のときは
-`workflow_run`固有のfilter(event種別・conclusion・head_branch)を素通りさせ、
-`chore/update-zengin-pl`→`main`の未mergeのPRがあれば無条件で全条件を再評価します
-(該当PRが無ければ`gh pr list`が空を返してすぐ終わるだけなので、通常時のコストはほぼ
-ありません)。これにより、原因を問わず最大15分以内に必ず再評価される経路を保証しています。
-通常経路である`workflow_run`側のfilter・頻度は変更していません。
-
-### fail-safeの挙動
-
-条件を満たさない場合は2種類に分けています。
-
-- **一時的な未達成(exit 0、正常終了)**: CI未完了・reviewでの変更依頼・未解決thread・
-  merge不可・head SHAの変化など。「今はまだ」なだけなので、次に`test`が再実行されたとき、
-  または遅くとも15分間隔の`schedule`実行時に再評価します。PRはopenのまま残ります。
-- **構造的な異常(exit 1、Actions上を赤くする)**: 想定外のauthor・branch・変更ファイル・diff形状など。
-  このbranchは`sync-zengin-pl-ref.sh`だけが操作する想定のため、これらが崩れているのは
-  script・branch保護・権限設定のどこかに問題がある可能性が高く、気づけるようにしています。
-  こちらも15分間隔の`schedule`で再評価されますが、原因(想定外のauthor/branch/diff形状)は
-  外的要因では解消しないため、根本原因を直さない限り赤いままになります。
-
-どちらの場合もmergeは実行されず、PRはopenのまま残ります。
-
-### merge方法とGitHub側で必要な設定
-
-mergeは`merge_method=merge`(merge commit)を使います。このrepositoryの既存PR(#1〜#11)は
-全て"Merge pull request #N from ..."形式のmerge commitで統合されており、既存運用に合わせました。
-squashやrebaseへは変更していません。
-
-GitHub Native Auto-merge機能(「Enable auto-merge」ボタンやbranch単位の`auto_merge`設定)は
-**使っていません**。判定から即mergeまでを自前のscriptで行うことで、条件再検証のタイミングを
-厳密に制御しています。そのため、repository設定の`Allow auto-merge`が無効(このrepositoryの
-現状のまま)でも問題なく動作します。
-
-このrepositoryには現在branch protectionが設定されていません(`main`に対する必須review・必須
-status checkはありません)。今回のauto-merge機構はこれを前提にせず、必要な確認(CI成功・review
-状態・conflictの有無)を全てscript側で明示的に行っています。より高い安全性を求める場合は、
-`main`にbranch protection(必須status check `test` / `docker`)を設定することを推奨しますが、
-これはrepository全体のmerge policyに関わる変更のため、今回は実施せず提案に留めます。
+`merge_method=merge` を使用します。GitHub Native Auto-mergeやbranch protectionの設定は変更しません。必要なjob名を変更する場合は `bin/lib/zengin-pl-verify.sh` と `bin/auto-merge-zengin-pl-pr.sh` の期待値も同時にレビューして変更してください。
 
 ## デプロイ方針
 
@@ -808,3 +694,4 @@ MIT License
 ## 作者
 
 [@sironekotoro](https://github.com/sironekotoro)
+

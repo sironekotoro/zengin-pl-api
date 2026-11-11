@@ -20,4 +20,19 @@ like(
     'deploy action applies the service-level maximum instance count',
 );
 
+my $build_pos = index($workflow, 'name: Build image');
+my $auth_pos = index($workflow, '- id: auth');
+ok($build_pos >= 0, 'Docker build marker exists');
+ok($auth_pos >= 0, 'cloud auth marker exists');
+ok($build_pos >= 0 && $auth_pos >= 0 && $build_pos < $auth_pos,
+    'cloud credentials are created only after Docker build');
+open my $ignore_fh, '<', '.dockerignore' or die $!;
+my $ignore = do { local $/; <$ignore_fh> };
+like($ignore, qr/^gha-creds-\*\.json$/m, 'root cloud credentials excluded from Docker context');
+like($ignore, qr/^\*\*\/gha-creds-\*\.json$/m, 'nested cloud credentials excluded from Docker context');
+like($workflow, qr/commit_sha:/, 'reusable deployment accepts an explicit commit SHA');
+like($workflow, qr/group: deploy-production/, 'deployment paths share one concurrency group');
+like($workflow, qr/run: bash bin\/verify-deployment\.sh "\$SERVICE_URL" "\$EXPECTED_SHA"/,
+    'deploy job must run post-rollout SHA verification');
 done_testing;
+
